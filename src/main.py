@@ -78,6 +78,13 @@ async def _refresh(dry_run: bool = False) -> dict:
     return snapshot
 
 
+async def _startup_refresh():
+    try:
+        await _refresh()
+    except Exception as e:
+        log.warning("startup refresh failed: %s", e)
+
+
 @app.on_event("startup")
 async def startup():
     if config.DATABASE_URL:
@@ -85,10 +92,8 @@ async def startup():
             db.init_tvol_tables()
         except Exception as e:
             log.warning("DB init failed (continuing without DB): %s", e)
-    try:
-        await _refresh()
-    except Exception as e:
-        log.warning("startup refresh failed (will serve cached HTML if exists): %s", e)
+    import asyncio
+    asyncio.create_task(_startup_refresh())
 
 
 @app.get("/")
