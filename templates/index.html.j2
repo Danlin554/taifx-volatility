@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台指平均震幅分析工具</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:100vh}
+.stale-banner{background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 16px;margin-bottom:10px;font-size:.82rem;color:#dc2626;font-weight:600}
+.wrap{max-width:860px;margin:0 auto;padding:14px}
+.hdr{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:18px 20px;border-radius:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.hdr h1{font-size:1.25rem;font-weight:700;letter-spacing:.5px}
+.hdr input[type=date]{background:transparent;border:none;color:#ccc;font-size:.85rem;font-family:inherit}
+.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.07)}
+.card-title{font-size:.85rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #f0f0f0;padding-bottom:8px;margin-bottom:14px}
+
+.us-layout{display:grid;grid-template-columns:1fr 200px;gap:16px}
+.market-tbl{width:100%;border-collapse:collapse}
+.market-tbl th{background:#f8f9fa;font-size:.72rem;color:#999;padding:6px 8px;text-align:center;font-weight:600}
+.market-tbl td{padding:4px 6px;text-align:center}
+.market-tbl .name{font-weight:700;font-size:.85rem;text-align:left;padding:4px 8px 4px 0}
+.num-input{border:1px solid #e0e0e0;border-radius:5px;padding:5px 6px;font-size:.88rem;width:76px;text-align:center;font-family:inherit}
+.num-input:focus{outline:none;border-color:#3b82f6}
+.prev-row{margin-top:10px;display:flex;align-items:center;gap:8px}
+.prev-row label{font-size:.75rem;color:#999;white-space:nowrap}
+.prev-row input{border:1px solid #e0e0e0;border-radius:5px;padding:6px 8px;font-size:.9rem;font-weight:600;width:110px;text-align:center;font-family:inherit}
+.prev-row input:focus{outline:none;border-color:#3b82f6}
+
+.results-col{display:flex;flex-direction:column;gap:8px}
+.rbox{border-radius:8px;padding:10px 12px;text-align:center}
+.rbox .rl{font-size:.68rem;color:#999;margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.3px}
+.rbox .rv{font-size:1.35rem;font-weight:700}
+.rbox.blue{background:#eff6ff;border:1px solid #bfdbfe}.rbox.blue .rv{color:#2563eb}
+.rbox.green{background:#f0fdf4;border:1px solid #bbf7d0}.rbox.green .rv{color:#16a34a}
+.rbox.range{background:#f8fafc;border:1px solid #e2e8f0}
+.range-row{display:flex;align-items:center;justify-content:center;gap:6px;font-weight:700;font-size:1.05rem}
+.rl-num{color:#16a34a}.rh-num{color:#dc2626}
+.rbox.amber{background:#fffbeb;border:1px solid #fde68a}.rbox.amber .rv{color:#d97706}
+.rbox.amber input{background:transparent;border:none;font-size:1.35rem;font-weight:700;color:#d97706;width:70px;text-align:center;font-family:inherit}
+
+.stat-tbl{width:100%;border-collapse:collapse;font-size:.85rem}
+.stat-tbl th{background:#f8f9fa;color:#999;padding:7px 10px;text-align:center;font-size:.72rem;font-weight:600}
+.stat-tbl td{padding:4px 8px;text-align:center;border-bottom:1px solid #f5f5f5}
+.stat-tbl td:first-child{text-align:left;font-weight:600;color:#555;font-size:.82rem}
+.stat-tbl .stat-val{font-weight:700;font-size:.92rem}
+
+.sigma-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.sigma-box{background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:10px;text-align:center}
+.sigma-box .sl{font-size:.68rem;color:#7e22ce;font-weight:600;margin-bottom:3px}
+.sigma-box .sv{font-size:1.1rem;font-weight:700;color:#6b21a8}
+
+.week-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.week-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;text-align:center}
+.week-box .wl{font-size:.72rem;color:#1e40af;font-weight:700;margin-bottom:4px}
+.week-box .wv{font-size:1rem;font-weight:700;color:#1e3a8a}
+
+.bb-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.bb-box{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px;text-align:center}
+.bb-box .bl{font-size:.7rem;color:#92400e;font-weight:700;margin-bottom:4px}
+.bb-box .bv{font-size:1.15rem;font-weight:700;color:#b45309}
+.bb-box.grand{background:#fef3c7;border-color:#f59e0b}
+.bb-box.grand .bv{font-size:1.2rem;color:#92400e}
+
+.guide p{font-size:.83rem;color:#555;padding:7px 0;border-bottom:1px solid #f5f5f5;line-height:1.6}
+.guide p:last-child{border-bottom:none}
+.guide strong{color:#1a1a2e}
+
+.footer{text-align:center;font-size:.72rem;color:#ccc;padding:8px 0 4px}
+
+@media(max-width:600px){
+  .us-layout{grid-template-columns:1fr}
+  .week-row{grid-template-columns:repeat(3,1fr)}
+  .bb-row{grid-template-columns:repeat(3,1fr)}
+  .sigma-row{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+{% if is_stale %}
+<div class="stale-banner">⚠️ 資料來源延遲，最新可用資料為 {{ asof_iso }}。如有疑問請手動修改下方數值，或等待下次自動更新。</div>
+{% endif %}
+
+<!-- Header -->
+<div class="hdr">
+  <h1>📊 台指平均震幅分析工具</h1>
+  <input type="date" id="openDate" value="{{ asof_iso }}">
+</div>
+
+<!-- 美股 + 預估 -->
+<div class="card">
+  <div class="card-title">美股漲跌幅 → 台指開盤預估</div>
+  <div class="us-layout">
+    <div>
+      <table class="market-tbl">
+        <thead>
+          <tr><th>指數</th><th>漲幅 (%)</th><th>權重 (%)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name" style="color:#1e40af">DJ</td>
+            <td><input class="num-input" type="number" id="djC" value="{{ us.dj }}" step="0.01"></td>
+            <td><input class="num-input" type="number" id="djW" value="50" step="1"></td>
+          </tr>
+          <tr>
+            <td class="name" style="color:#7c3aed">NQ</td>
+            <td><input class="num-input" type="number" id="nqC" value="{{ us.nq }}" step="0.01"></td>
+            <td><input class="num-input" type="number" id="nqW" value="50" step="1"></td>
+          </tr>
+          <tr>
+            <td class="name" style="color:#047857">SPY</td>
+            <td><input class="num-input" type="number" id="spyC" value="{{ us.spy }}" step="0.01"></td>
+            <td><input class="num-input" type="number" id="spyW" value="0" step="1"></td>
+          </tr>
+          <tr>
+            <td class="name" style="color:#b45309">TSM</td>
+            <td><input class="num-input" type="number" id="tsmC" value="{{ us.tsm }}" step="0.01"></td>
+            <td><input class="num-input" type="number" id="tsmW" value="0" step="1"></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="prev-row">
+        <label>前日台指期貨收盤</label>
+        <input type="number" id="prevClose" value="{{ prev_close }}" step="1">
+      </div>
+    </div>
+    <div class="results-col">
+      <div class="rbox blue">
+        <div class="rl">加權美股漲幅</div>
+        <div class="rv" id="wChg">—</div>
+      </div>
+      <div class="rbox green">
+        <div class="rl">期貨預估</div>
+        <div class="rv" id="futEst">—</div>
+      </div>
+      <div class="rbox range">
+        <div class="rl">合理範圍</div>
+        <div class="range-row">
+          <span class="rl-num" id="rLow">—</span>
+          <span style="color:#aaa">～</span>
+          <span class="rh-num" id="rHigh">—</span>
+        </div>
+      </div>
+      <div class="rbox amber">
+        <div class="rl">單位風險 R</div>
+        <div class="rv"><input type="number" id="rR" value="{{ r }}" step="1"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 震幅統計 -->
+<div class="card">
+  <div class="card-title">震幅統計</div>
+  <table class="stat-tbl">
+    <thead>
+      <tr><th style="text-align:left">項目</th><th>20日</th><th>10日</th><th>5日</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>平均振幅 (H-L)</td>
+        <td><input class="num-input stat-val" type="number" id="a20" value="{{ stats.a20 }}" step="0.01"></td>
+        <td><input class="num-input stat-val" type="number" id="a10" value="{{ stats.a10 }}" step="0.01"></td>
+        <td><input class="num-input stat-val" type="number" id="a5"  value="{{ stats.a5  }}" step="0.01"></td>
+      </tr>
+      <tr>
+        <td>振幅標準差</td>
+        <td><input class="num-input stat-val" type="number" id="s20" value="{{ stats.s20 }}" step="0.01"></td>
+        <td><input class="num-input stat-val" type="number" id="s10" value="{{ stats.s10 }}" step="0.01"></td>
+        <td><input class="num-input stat-val" type="number" id="s5"  value="{{ stats.s5  }}" step="0.01"></td>
+      </tr>
+      <tr style="color:#999;font-size:.78rem">
+        <td>ATR (True Range)</td>
+        <td class="stat-val" style="font-size:.78rem">{{ atr.atr20 }}</td>
+        <td class="stat-val" style="font-size:.78rem">{{ atr.atr10 }}</td>
+        <td class="stat-val" style="font-size:.78rem">{{ atr.atr5 }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="sigma-row">
+    <div class="sigma-box"><div class="sl">一個標準差震幅</div><div class="sv" id="sig1">—</div></div>
+    <div class="sigma-box"><div class="sl">兩個標準差震幅</div><div class="sv" id="sig2">—</div></div>
+    <div class="sigma-box"><div class="sl">三個標準差震幅</div><div class="sv" id="sig3">—</div></div>
+  </div>
+</div>
+
+<!-- 週別 -->
+<div class="card">
+  <div class="card-title">週別平均震幅　<span style="font-size:.72rem;color:#bbb;font-weight:400">取樣 {{ weekday_months }} 個月</span></div>
+  <div class="week-row">
+    <div class="week-box"><div class="wl">週一</div><div class="wv">{{ weekday.mon }}</div></div>
+    <div class="week-box"><div class="wl">週二</div><div class="wv">{{ weekday.tue }}</div></div>
+    <div class="week-box"><div class="wl">週三</div><div class="wv">{{ weekday.wed }}</div></div>
+    <div class="week-box"><div class="wl">週四</div><div class="wv">{{ weekday.thu }}</div></div>
+    <div class="week-box"><div class="wl">週五</div><div class="wv">{{ weekday.fri }}</div></div>
+  </div>
+</div>
+
+<!-- 當沖目標 -->
+<div class="card">
+  <div class="card-title">⚾ 當沖目標震幅</div>
+  <div class="bb-row">
+    <div class="bb-box"><div class="bl">一壘打</div><div class="bv">{{ targets.b1 }}</div></div>
+    <div class="bb-box"><div class="bl">二壘打</div><div class="bv">{{ targets.b2 }}</div></div>
+    <div class="bb-box"><div class="bl">三壘打</div><div class="bv">{{ targets.b3 }}</div></div>
+    <div class="bb-box"><div class="bl">全壘打</div><div class="bv">{{ targets.b4 }}</div></div>
+    <div class="bb-box grand"><div class="bl">場外全壘打</div><div class="bv">{{ targets.b5 }}</div></div>
+  </div>
+</div>
+
+<!-- 使用指南 -->
+<div class="card">
+  <div class="card-title">📖 使用指南</div>
+  <div class="guide">
+    <p>· 震幅數據每日 06:00 自動更新，無需手動輸入。</p>
+    <p>· <strong>單位風險 R</strong>：決定一口停損點數，用來衡量 CP 值；預估獲利 ÷ R = 盈虧比。</p>
+    <p>· <strong>合理範圍</strong>：期貨預估 ×（1 ± 0.5%），作為開盤後的合理波動區間。</p>
+    <p>· <strong>標準差震幅</strong>：歷史 10 日震幅的一個標準差，用來評估還有多少空間並決定提早停利時機。</p>
+    <p>· <strong>美股漲跌幅</strong>：加權平均後預估台指開盤點數，評估台股強弱度與方向背離，決定偏多或偏空。</p>
+    <p>· <strong>當沖目標</strong>：三壘打 = 20日平均振幅；場外全壘打 = 近20日最大振幅（極端行情）。</p>
+    <p>· <strong>權重與 R</strong>：調整後自動儲存至瀏覽器，重新整理後保留。</p>
+  </div>
+</div>
+
+<div class="footer">
+  自動更新 · {{ generated_at }} · 台指期資料來源 FinMind (TX) / 美股 yfinance
+</div>
+</div>
+
+<script>
+// localStorage 只保留「你自訂的」欄位：權重與 R
+const SAVE_KEYS = ['djW','nqW','spyW','tsmW','rR'];
+
+function load() {
+  SAVE_KEYS.forEach(k => {
+    const v = localStorage.getItem('taifx_'+k);
+    if (v !== null) { const el = document.getElementById(k); if(el) el.value = v; }
+  });
+}
+
+function save() {
+  SAVE_KEYS.forEach(k => {
+    const el = document.getElementById(k);
+    if(el) localStorage.setItem('taifx_'+k, el.value);
+  });
+}
+
+function n(id) { return parseFloat(document.getElementById(id).value) || 0; }
+
+function fmt(v, dec=2) {
+  if (isNaN(v)) return '—';
+  return v.toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function calculate() {
+  save();
+
+  const djC=n('djC'), djW=n('djW');
+  const nqC=n('nqC'), nqW=n('nqW');
+  const spyC=n('spyC'), spyW=n('spyW');
+  const tsmC=n('tsmC'), tsmW=n('tsmW');
+  const prev=n('prevClose');
+  const a10=n('a10'), s10=n('s10');
+
+  const totalW = djW+nqW+spyW+tsmW;
+  const wChg = totalW > 0
+    ? (djC*djW + nqC*nqW + spyC*spyW + tsmC*tsmW) / totalW
+    : 0;
+
+  const futEst = Math.round(prev * (1 + wChg/100));
+  const rLow  = Math.round(futEst * 0.995);
+  const rHigh = Math.round(futEst * 1.005);
+
+  const sig1 = a10 + s10;
+  const sig2 = a10 + 2*s10;
+  const sig3 = a10 + 3*s10;
+
+  const wEl = document.getElementById('wChg');
+  wEl.textContent = (wChg >= 0 ? '+' : '') + wChg.toFixed(2) + '%';
+  wEl.style.color = wChg >= 0 ? '#16a34a' : '#dc2626';
+
+  document.getElementById('futEst').textContent = futEst.toLocaleString();
+  document.getElementById('rLow').textContent = rLow.toLocaleString();
+  document.getElementById('rHigh').textContent = rHigh.toLocaleString();
+
+  document.getElementById('sig1').textContent = fmt(sig1);
+  document.getElementById('sig2').textContent = fmt(sig2);
+  document.getElementById('sig3').textContent = fmt(sig3);
+  // b1-b5 由 server 端提供，不在前端重算
+}
+
+document.querySelectorAll('input').forEach(el => el.addEventListener('input', calculate));
+
+load();
+calculate();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+name: cron refresh
+
+on:
+  schedule:
+    - cron: '0 22 * * 0-4'  # 22:00 UTC = 06:00 Asia/Taipei，週日~週四（對應台股週一~週五早上）
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /refresh
+        run: |
+          STATUS=$(curl -fsS -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.ZEABUR_URL }}/refresh?token=${{ secrets.REFRESH_TOKEN }}")
+          echo "HTTP $STATUS"
+          [ "$STATUS" = "200" ] || exit 1
