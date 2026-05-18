@@ -36,7 +36,7 @@ ON CONFLICT (symbol, trade_date) DO UPDATE SET
 
 
 def get_conn():
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    conn = psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=10)
     with conn.cursor() as cur:
         cur.execute("SET timezone='Asia/Taipei'")
     return conn
