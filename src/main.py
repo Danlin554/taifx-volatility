@@ -81,7 +81,10 @@ async def _refresh(dry_run: bool = False) -> dict:
 @app.on_event("startup")
 async def startup():
     if config.DATABASE_URL:
-        db.init_tvol_tables()
+        try:
+            db.init_tvol_tables()
+        except Exception as e:
+            log.warning("DB init failed (continuing without DB): %s", e)
     try:
         await _refresh()
     except Exception as e:
