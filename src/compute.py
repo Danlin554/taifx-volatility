@@ -1,5 +1,18 @@
+from __future__ import annotations
+
 import math
+from types import MappingProxyType
+
 import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# Rounding（half-up，與前端 JS Math.floor(x+0.5) 完全一致）
+# ---------------------------------------------------------------------------
+
+def _round_half_up(x: float) -> int:
+    """Half-up 四捨五入，避免 Python round() 的銀行家捨入。"""
+    return int(math.floor(x + 0.5))
 
 
 # ---------------------------------------------------------------------------
@@ -49,10 +62,7 @@ def atr_wilder(tr: pd.Series, n: int) -> float:
 # ---------------------------------------------------------------------------
 
 def rolling_stats(hl: pd.Series) -> dict:
-    """
-    基於簡單振幅 (H-L) 的統計。
-    回傳 a20/a10/a5（SMA）與 s20/s10/s5（樣本標準差 ddof=1）。
-    """
+    """基於 H-L 的 SMA 與標準差。資料不足時相應項目回 NaN。"""
     return {
         "a20": float(hl.rolling(20).mean().iloc[-1]),
         "a10": float(hl.rolling(10).mean().iloc[-1]),
@@ -64,11 +74,11 @@ def rolling_stats(hl: pd.Series) -> dict:
 
 
 def atr_rolling_stats(tr: pd.Series) -> dict:
-    """基於 ATR True Range 的統計，作為補充輸出。"""
+    """基於 ATR True Range 的統計。"""
     return {
-        "atr20": atr_sma(tr, 20),
-        "atr10": atr_sma(tr, 10),
-        "atr5":  atr_sma(tr, 5),
+        "atr20":  atr_sma(tr, 20),
+        "atr10":  atr_sma(tr, 10),
+        "atr5":   atr_sma(tr, 5),
         "atr20w": atr_wilder(tr, 20),
         "atr10w": atr_wilder(tr, 10),
         "atr5w":  atr_wilder(tr, 5),
@@ -81,12 +91,38 @@ def sigma_bands(a10: float, s10: float) -> tuple[float, float, float]:
 
 
 def weekday_avg(hl: pd.Series, months: int = 6) -> dict:
-    """最近 N 個月的週別平均振幅（基於簡單 H-L）。"""
+    """最近 N 個月的週別平均振幅。"""
+    if hl.empty:
+        return {"mon": 0.0, "tue": 0.0, "wed": 0.0, "thu": 0.0, "fri": 0.0}
     cutoff = hl.index[-1] - pd.DateOffset(months=months)
     recent = hl[hl.index >= cutoff]
     by_day = recent.groupby(recent.index.weekday).mean()
     keys = ["mon", "tue", "wed", "thu", "fri"]
     return {keys[i]: round(float(by_day.get(i, 0)), 2) for i in range(5)}
+
+
+def weekday_avg_multi(hl: pd.Series) -> dict:
+    """回 {m1, m2, m3, m6}，每個值為 5 個週別的平均振幅 dict；資料不足時為 None。"""
+    return {
+        key: _weekday_avg_for_months(hl, months)
+        for months, key in [(1, "m1"), (2, "m2"), (3, "m3"), (6, "m6")]
+    }
+
+
+def _weekday_avg_for_months(hl: pd.Series, months: int) -> dict | None:
+    if hl.empty:
+        return None
+    cutoff = hl.index[-1] - pd.DateOffset(months=months)
+    recent = hl[hl.index >= cutoff]
+    if len(recent) == 0:
+        return None
+    by_day = recent.groupby(recent.index.weekday).mean()
+    keys = ["mon", "tue", "wed", "thu", "fri"]
+    result = {}
+    for i, k in enumerate(keys):
+        val = by_day.get(i, None)
+        result[k] = round(float(val), 2) if val is not None and not pd.isna(val) else None
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -95,15 +131,13 @@ def weekday_avg(hl: pd.Series, months: int = 6) -> dict:
 
 def daytrade_targets(hl: pd.Series, window: int = 20) -> dict:
     """
-    當沖目標分級，基於最近 window 筆 H-L 振幅：
-      b1 = MIN（一壘打）
-      b2 = AVERAGEIF < avg（二壘打）
-      b3 = AVERAGE（三壘打）
-      b4 = AVERAGEIF > avg（場內全壘打）
-      b5 = MAX（場外全壘打）
-    對應試算表 TAIFX 欄的公式，非固定倍率。
+    當沖目標分級（b1=MIN / b2=AVERAGEIF<avg / b3=AVG / b4=AVERAGEIF>avg / b5=MAX）。
+    資料不足時回 NaN。
     """
     recent = hl.iloc[-window:]
+    if len(recent) == 0:
+        nan = float("nan")
+        return {"b1": nan, "b2": nan, "b3": nan, "b4": nan, "b5": nan}
     avg = float(recent.mean())
     below = recent[recent < avg]
     above = recent[recent > avg]
@@ -122,14 +156,42 @@ def calc_r(a10: float) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 預估開盤（前端用，weights 來自 localStorage）
+# 預估開盤
+# ---------------------------------------------------------------------------
+
+DEFAULT_OPEN_WEIGHTS = MappingProxyType({"dj": 50, "nq": 50, "spy": 0, "tsm": 0})
+
+
+def default_open_price(
+    prev_close: float,
+    us_pcts: dict,
+    weights: dict | None = None,
+) -> int:
+    """
+    美股加權漲幅 → D+1 預估開盤（half-up 整數）。
+    weights 預設 DJ50/NQ50/SPY0/TSM0；傳入 {} 會 raise ValueError。
+    """
+    if weights is None:
+        weights = DEFAULT_OPEN_WEIGHTS
+    missing = {"dj", "nq", "spy", "tsm"} - weights.keys()
+    if missing:
+        raise ValueError(f"default_open_price weights missing keys: {missing}")
+
+    total_w = sum(weights.values())
+    if total_w == 0:
+        weighted_pct = 0.0
+    else:
+        weighted_pct = sum(us_pcts[k] * weights[k] for k in weights) / total_w
+
+    return _round_half_up(prev_close * (1 + weighted_pct / 100))
+
+
+# ---------------------------------------------------------------------------
+# 舊版預估（保留 backward-compat）
 # ---------------------------------------------------------------------------
 
 def forecast(prev_close: float, us_pcts: dict, weights: dict) -> dict:
-    """
-    美股加權漲幅 → 台指期預估開盤，合理範圍 = 期貨預估 × ±0.5%。
-    分母為 0 時 weighted_pct = 0（全權重設 0 的狀況）。
-    """
+    """美股加權漲幅 → 台指期預估開盤，合理範圍 = 期貨預估 × ±0.5%。"""
     total_w = sum(weights.values())
     if total_w == 0:
         weighted_pct = 0.0
@@ -146,7 +208,7 @@ def forecast(prev_close: float, us_pcts: dict, weights: dict) -> dict:
 
 
 def build_forecast(prev_close: float, us_pcts: dict, weights: dict) -> dict:
-    """含合理範圍的完整預估（合理範圍 = 期貨預估 × ±0.5%）。"""
+    """含合理範圍的完整預估。"""
     total_w = sum(weights.values())
     weighted_pct = (
         sum(us_pcts[k] * weights[k] for k in us_pcts) / total_w

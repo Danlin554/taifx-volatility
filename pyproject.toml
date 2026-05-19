@@ -15,6 +15,7 @@ dependencies = [
     "pytz>=2024.1",
     "openpyxl>=3.1.5",
     "requests>=2.32",
+    "exchange-calendars>=4.5",
 ]
 
 [project.optional-dependencies]
@@ -34,4 +35,12 @@ packages = ["src"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+markers = [
+    "integration: tests that require real external services (exchange_calendars, PostgreSQL)",
 ]

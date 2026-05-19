@@ -8,6 +8,8 @@
   注意：b5=734 是 MAX of HL，非 sig2=736.98
 """
 
+import math
+
 import pytest
 import pandas as pd
 import numpy as np
@@ -19,6 +21,10 @@ from src.compute import (
     forecast,
     build_forecast,
     calc_r,
+    _round_half_up,
+    weekday_avg_multi,
+    default_open_price,
+    rolling_stats,
 )
 
 
@@ -124,3 +130,120 @@ class TestForecast:
         assert result["fut_est"] == 29800
         assert result["range_low"] == round(29800 * 0.995)    # 29651
         assert result["range_high"] == round(29800 * 1.005)   # 29949
+
+
+class TestRoundHalfUp:
+    def test_half_boundary_rounds_up(self):
+        # 23114.5 → 23115（Python round() 銀行家捨入會給 23114，這裡必須 23115）
+        assert _round_half_up(23114.5) == 23115
+        assert _round_half_up(23115.5) == 23116
+        assert _round_half_up(23116.5) == 23117
+
+    def test_negative_half_boundary(self):
+        # _round_half_up(-0.5) == 0（與 JS Math.floor(-0.5 + 0.5) = 0 一致）
+        assert _round_half_up(-0.5) == 0
+        # _round_half_up(-1.5) == -1（與 JS Math.floor(-1.5 + 0.5) = -1 一致）
+        assert _round_half_up(-1.5) == -1
+        # 驗 Python round(-1.5) == -2（銀行家捨入，與我們的 helper 不同）
+        assert round(-1.5) == -2
+
+    def test_integer_unchanged(self):
+        assert _round_half_up(100.0) == 100
+        assert _round_half_up(0.0) == 0
+
+    def test_normal_rounding(self):
+        assert _round_half_up(23100.3) == 23100
+        assert _round_half_up(23100.7) == 23101
+
+
+class TestDefaultOpenPrice:
+    def test_basic_dj50_nq50(self):
+        # DJ +1%, NQ +1% → weighted +1% → prev_close=20000 → 20200
+        pcts = {"dj": 1.0, "nq": 1.0, "spy": 0.0, "tsm": 0.0}
+        result = default_open_price(20000, pcts)
+        assert result == 20200
+
+    def test_empty_weights_raises(self):
+        # 傳 {} 應 raise ValueError，不靜默替換成預設
+        pcts = {"dj": 1.0, "nq": 1.0, "spy": 0.0, "tsm": 0.0}
+        with pytest.raises(ValueError, match="missing keys"):
+            default_open_price(20000, pcts, weights={})
+
+    def test_custom_weights(self):
+        # 100% DJ，DJ +2% → 結果應是 prev_close * 1.02
+        pcts = {"dj": 2.0, "nq": 0.0, "spy": 0.0, "tsm": 0.0}
+        result = default_open_price(10000, pcts, weights={"dj": 100, "nq": 0, "spy": 0, "tsm": 0})
+        assert result == 10200
+
+    def test_half_boundary_uses_half_up(self):
+        # 構造一個結果為 .5 的情境：prev_close=23000, 加權漲幅讓結果 = 23114.5
+        # weighted_pct = (23114.5 / 23000 - 1) * 100 ≈ 0.497826...%
+        # 用 DJ=100% 讓計算簡單：DJ pct = 0.497826...
+        import math as _math
+        target = 23114.5
+        pct = (target / 23000 - 1) * 100
+        pcts = {"dj": pct, "nq": 0.0, "spy": 0.0, "tsm": 0.0}
+        result = default_open_price(23000, pcts, weights={"dj": 100, "nq": 0, "spy": 0, "tsm": 0})
+        # 預期走 half-up → 23115，不是 Python round() 可能的 23114
+        assert result == 23115
+
+
+class TestWeekdayAvgMulti:
+    def _make_hl(self, n_months=7):
+        """製造 n_months 個月的週一~週五資料，每日振幅 = 100。"""
+        import datetime
+        dates = pd.bdate_range(
+            end=pd.Timestamp("2026-05-16"),
+            periods=n_months * 22,  # 約 22 個交易日/月
+        )
+        return pd.Series(100.0, index=dates, name="hl")
+
+    def test_m6_available_when_enough_data(self):
+        hl = self._make_hl(n_months=7)
+        result = weekday_avg_multi(hl)
+        assert result["m6"] is not None
+        assert isinstance(result["m6"], dict)
+        assert set(result["m6"].keys()) == {"mon", "tue", "wed", "thu", "fri"}
+
+    def test_m1_available_when_enough_data(self):
+        hl = self._make_hl(n_months=7)
+        result = weekday_avg_multi(hl)
+        assert result["m1"] is not None
+
+    def test_empty_series_returns_none_for_all(self):
+        hl = pd.Series([], dtype=float)
+        result = weekday_avg_multi(hl)
+        assert result["m1"] is None
+        assert result["m6"] is None
+
+    def test_missing_weekday_within_dict_is_none(self):
+        # 3 天都是同一周的 Wed/Thu/Fri → Mon、Tue 的平均應為 None（dict 存在但值為 None）
+        dates = pd.DatetimeIndex([
+            pd.Timestamp("2026-05-13"),  # Wed
+            pd.Timestamp("2026-05-14"),  # Thu
+            pd.Timestamp("2026-05-15"),  # Fri
+        ])
+        hl = pd.Series([100.0, 200.0, 150.0], index=dates)
+        result = weekday_avg_multi(hl)
+        # 不論哪個月份，dict 都應存在
+        assert isinstance(result["m1"], dict)
+        # Mon 和 Tue 沒有資料 → 值為 None
+        assert result["m1"]["mon"] is None
+        assert result["m1"]["tue"] is None
+        # Wed/Thu/Fri 有資料 → 值不為 None
+        assert result["m1"]["wed"] is not None
+        assert result["m1"]["thu"] is not None
+        assert result["m1"]["fri"] is not None
+
+
+class TestRollingStatsInsufficient:
+    def test_a20_nan_when_only_5_rows(self):
+        hl = pd.Series([100.0, 200.0, 150.0, 180.0, 120.0])
+        stats = rolling_stats(hl)
+        assert math.isnan(stats["a20"])  # 5 筆不夠 20 日窗口
+
+    def test_a5_valid_when_5_rows(self):
+        hl = pd.Series([100.0, 200.0, 150.0, 180.0, 120.0])
+        stats = rolling_stats(hl)
+        assert not math.isnan(stats["a5"])
+        assert stats["a5"] == pytest.approx(150.0, abs=0.01)

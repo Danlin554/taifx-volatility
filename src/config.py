@@ -14,8 +14,8 @@ US_SYMBOLS = {
 # 台指期近月合約（富邦 API symbol）
 TXF_SYMBOL = "TXFR1"
 
-# 取回幾天的歷史（台指期 weekday avg 需要 6 個月 ≈ 180 天）
-LOOKBACK_DAYS = 200
+# 取回幾天的歷史（130 交易日 ÷ ~0.69 ≈ 189 日曆天，加長假 buffer → 220）
+LOOKBACK_DAYS = 220
 
 WEEKDAY_MONTHS = 6
 
@@ -30,3 +30,7 @@ FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 
 REFRESH_TOKEN = os.getenv("REFRESH_TOKEN", "dev-token")
 DATABASE_URL  = os.getenv("DATABASE_URL", "")
+
+# Live publish 降級旗標（預設 fail-closed）
+ALLOW_DEGRADED_TXF_FRESHNESS: bool = bool(os.getenv("ALLOW_DEGRADED_TXF_FRESHNESS", ""))
+ALLOW_DEGRADED_US_SESSION: bool = bool(os.getenv("ALLOW_DEGRADED_US_SESSION", ""))

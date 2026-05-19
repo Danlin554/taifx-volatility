@@ -19,3 +19,11 @@ def render(snapshot: dict) -> str:
     out_path = _OUT_DIR / "index.html"
     out_path.write_text(html, encoding="utf-8")
     return html
+
+
+def render_to(snapshot: dict, path: pathlib.Path) -> None:
+    """渲染 index.html.j2 並寫出到指定路徑（供 publish_snapshot 的 render_tmp 步驟使用）。"""
+    template = _env.get_template("index.html.j2")
+    html = template.render(**snapshot)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(html, encoding="utf-8")
