@@ -7,11 +7,16 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:100vh}
-.stale-banner{background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 16px;margin-bottom:10px;font-size:.82rem;color:#dc2626;font-weight:600}
+.banner{border-radius:8px;padding:10px 16px;margin-bottom:10px;font-size:.82rem;font-weight:600}
+.stale-banner{background:#fef2f2;border:1px solid #fca5a5;color:#dc2626}
+.adj-banner{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
 .wrap{max-width:860px;margin:0 auto;padding:14px}
-.hdr{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:18px 20px;border-radius:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.hdr{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:18px 20px;border-radius:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .hdr h1{font-size:1.25rem;font-weight:700;letter-spacing:.5px}
-.hdr input[type=date]{background:transparent;border:none;color:#ccc;font-size:.85rem;font-family:inherit}
+.hdr-right{display:flex;align-items:center;gap:10px}
+.hdr input[type=date]{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:6px;color:#fff;font-size:.88rem;font-family:inherit;padding:5px 8px;cursor:pointer}
+.hdr input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1);cursor:pointer}
+.hdr input[type=date]:focus{outline:none;border-color:#60a5fa}
 .card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.07)}
 .card-title{font-size:.85rem;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #f0f0f0;padding-bottom:8px;margin-bottom:14px}
 
@@ -55,6 +60,7 @@ body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;c
 .week-box .wl{font-size:.72rem;color:#1e40af;font-weight:700;margin-bottom:4px}
 .week-box .wv{font-size:1rem;font-weight:700;color:#1e3a8a}
 
+/* 當沖目標 + 多空目標 */
 .bb-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
 .bb-box{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px;text-align:center}
 .bb-box .bl{font-size:.7rem;color:#92400e;font-weight:700;margin-bottom:4px}
@@ -62,31 +68,67 @@ body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;c
 .bb-box.grand{background:#fef3c7;border-color:#f59e0b}
 .bb-box.grand .bv{font-size:1.2rem;color:#92400e}
 
+.dir-section{margin-top:10px}
+.dir-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:6px}
+.dir-box{border-radius:8px;padding:8px 10px;text-align:center}
+.dir-box .dl{font-size:.66rem;font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.3px}
+.dir-box .dv{font-size:1rem;font-weight:700}
+.dir-box.long-box{background:#f0fdf4;border:1px solid #86efac}
+.dir-box.long-box .dl{color:#166534}
+.dir-box.long-box .dv{color:#15803d}
+.dir-box.short-box{background:#fff1f2;border:1px solid #fda4af}
+.dir-box.short-box .dl{color:#9f1239}
+.dir-box.short-box .dv{color:#be123c}
+.dir-label{font-size:.75rem;font-weight:700;color:#777;margin:8px 0 4px;display:flex;align-items:center;gap:6px}
+.dir-label .badge{padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700}
+.badge-long{background:#dcfce7;color:#166534}
+.badge-short{background:#ffe4e6;color:#9f1239}
+.open-price-hint{font-size:.72rem;color:#aaa;margin-bottom:4px}
+
 .guide p{font-size:.83rem;color:#555;padding:7px 0;border-bottom:1px solid #f5f5f5;line-height:1.6}
 .guide p:last-child{border-bottom:none}
 .guide strong{color:#1a1a2e}
 
 .footer{text-align:center;font-size:.72rem;color:#ccc;padding:8px 0 4px}
 
+/* Loading 狀態 */
+body.loading{pointer-events:none}
+body.loading::after{content:'載入中…';position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(26,26,46,.85);color:#fff;padding:12px 28px;border-radius:10px;font-size:1rem;z-index:9999;letter-spacing:.5px}
+body.loading .wrap{opacity:.5}
+
+/* Toast */
+#_toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1a1a2e;color:#fff;padding:10px 22px;border-radius:8px;font-size:.85rem;z-index:9999;pointer-events:none;opacity:0;transition:opacity .3s;white-space:nowrap}
+
 @media(max-width:600px){
   .us-layout{grid-template-columns:1fr}
   .week-row{grid-template-columns:repeat(3,1fr)}
-  .bb-row{grid-template-columns:repeat(3,1fr)}
+  .bb-row,.dir-row{grid-template-columns:repeat(3,1fr)}
   .sigma-row{grid-template-columns:1fr 1fr}
 }
 </style>
 </head>
 <body>
+<div id="_toast"></div>
 <div class="wrap">
 
-{% if is_stale %}
-<div class="stale-banner">⚠️ 資料來源延遲，最新可用資料為 {{ asof_iso }}。如有疑問請手動修改下方數值，或等待下次自動更新。</div>
-{% endif %}
+<div class="banner stale-banner" id="stale-banner" {% if not is_stale %}hidden{% endif %}>
+  ⚠️ 資料來源延遲，最新可用資料為 {{ asof_iso }}，請等待下次自動更新。
+</div>
+
+<div class="banner adj-banner" id="adj-banner" {% if not asof_adjusted_from %}hidden{% endif %}>
+  ⚠️ 查詢日期非交易日，顯示最近交易日資料（{{ resolved_effective_date }}）
+</div>
 
 <!-- Header -->
 <div class="hdr">
   <h1>📊 台指平均震幅分析工具</h1>
-  <input type="date" id="openDate" value="{{ asof_iso }}">
+  <div class="hdr-right">
+    <span id="data-source-badge" style="font-size:.72rem;opacity:.7">{{ 'LIVE' if data_source == 'live' else 'DB' }}</span>
+    <input type="date" id="openDate"
+           value="{{ effective_date or asof_iso }}"
+           min="{{ earliest_db_date or '' }}"
+           max="{{ server_today or '' }}">
+  </div>
 </div>
 
 <!-- 美股 + 預估 -->
@@ -132,7 +174,7 @@ body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;c
         <div class="rv" id="wChg">—</div>
       </div>
       <div class="rbox green">
-        <div class="rl">期貨預估</div>
+        <div class="rl">期貨預估開盤</div>
         <div class="rv" id="futEst">—</div>
       </div>
       <div class="rbox range">
@@ -173,9 +215,9 @@ body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;c
       </tr>
       <tr style="color:#999;font-size:.78rem">
         <td>ATR (True Range)</td>
-        <td class="stat-val" style="font-size:.78rem">{{ atr.atr20 }}</td>
-        <td class="stat-val" style="font-size:.78rem">{{ atr.atr10 }}</td>
-        <td class="stat-val" style="font-size:.78rem">{{ atr.atr5 }}</td>
+        <td class="stat-val" id="atr20" style="font-size:.78rem">{{ atr.atr20 }}</td>
+        <td class="stat-val" id="atr10" style="font-size:.78rem">{{ atr.atr10 }}</td>
+        <td class="stat-val" id="atr5"  style="font-size:.78rem">{{ atr.atr5  }}</td>
       </tr>
     </tbody>
   </table>
@@ -190,23 +232,45 @@ body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;c
 <div class="card">
   <div class="card-title">週別平均震幅　<span style="font-size:.72rem;color:#bbb;font-weight:400">取樣 {{ weekday_months }} 個月</span></div>
   <div class="week-row">
-    <div class="week-box"><div class="wl">週一</div><div class="wv">{{ weekday.mon }}</div></div>
-    <div class="week-box"><div class="wl">週二</div><div class="wv">{{ weekday.tue }}</div></div>
-    <div class="week-box"><div class="wl">週三</div><div class="wv">{{ weekday.wed }}</div></div>
-    <div class="week-box"><div class="wl">週四</div><div class="wv">{{ weekday.thu }}</div></div>
-    <div class="week-box"><div class="wl">週五</div><div class="wv">{{ weekday.fri }}</div></div>
+    <div class="week-box"><div class="wl">週一</div><div class="wv" id="wd-mon">{{ weekday.mon }}</div></div>
+    <div class="week-box"><div class="wl">週二</div><div class="wv" id="wd-tue">{{ weekday.tue }}</div></div>
+    <div class="week-box"><div class="wl">週三</div><div class="wv" id="wd-wed">{{ weekday.wed }}</div></div>
+    <div class="week-box"><div class="wl">週四</div><div class="wv" id="wd-thu">{{ weekday.thu }}</div></div>
+    <div class="week-box"><div class="wl">週五</div><div class="wv" id="wd-fri">{{ weekday.fri }}</div></div>
   </div>
 </div>
 
-<!-- 當沖目標 -->
+<!-- 當沖目標 + 多空目標 -->
 <div class="card">
-  <div class="card-title">⚾ 當沖目標震幅</div>
+  <div class="card-title">⚾ 當沖目標振幅</div>
   <div class="bb-row">
-    <div class="bb-box"><div class="bl">一壘打</div><div class="bv">{{ targets.b1 }}</div></div>
-    <div class="bb-box"><div class="bl">二壘打</div><div class="bv">{{ targets.b2 }}</div></div>
-    <div class="bb-box"><div class="bl">三壘打</div><div class="bv">{{ targets.b3 }}</div></div>
-    <div class="bb-box"><div class="bl">全壘打</div><div class="bv">{{ targets.b4 }}</div></div>
-    <div class="bb-box grand"><div class="bl">場外全壘打</div><div class="bv">{{ targets.b5 }}</div></div>
+    <div class="bb-box"><div class="bl">一壘打</div><div class="bv" id="tgt-b1">{{ targets.b1 }}</div></div>
+    <div class="bb-box"><div class="bl">二壘打</div><div class="bv" id="tgt-b2">{{ targets.b2 }}</div></div>
+    <div class="bb-box"><div class="bl">三壘打</div><div class="bv" id="tgt-b3">{{ targets.b3 }}</div></div>
+    <div class="bb-box"><div class="bl">全壘打</div><div class="bv" id="tgt-b4">{{ targets.b4 }}</div></div>
+    <div class="bb-box grand"><div class="bl">場外全壘打</div><div class="bv" id="tgt-b5">{{ targets.b5 }}</div></div>
+  </div>
+
+  <div class="dir-section">
+    <div class="open-price-hint">以下目標以預估開盤 <strong id="open-price-display">—</strong> 為基準</div>
+
+    <div class="dir-label"><span class="badge badge-long">多方目標</span> 做多獲利目標（開盤 + 振幅）</div>
+    <div class="dir-row">
+      <div class="dir-box long-box"><div class="dl">一壘</div><div class="dv" id="long-b1">—</div></div>
+      <div class="dir-box long-box"><div class="dl">二壘</div><div class="dv" id="long-b2">—</div></div>
+      <div class="dir-box long-box"><div class="dl">三壘</div><div class="dv" id="long-b3">—</div></div>
+      <div class="dir-box long-box"><div class="dl">全壘打</div><div class="dv" id="long-b4">—</div></div>
+      <div class="dir-box long-box"><div class="dl">場外</div><div class="dv" id="long-b5">—</div></div>
+    </div>
+
+    <div class="dir-label"><span class="badge badge-short">空方目標</span> 做空獲利目標（開盤 - 振幅）</div>
+    <div class="dir-row">
+      <div class="dir-box short-box"><div class="dl">一壘</div><div class="dv" id="short-b1">—</div></div>
+      <div class="dir-box short-box"><div class="dl">二壘</div><div class="dv" id="short-b2">—</div></div>
+      <div class="dir-box short-box"><div class="dl">三壘</div><div class="dv" id="short-b3">—</div></div>
+      <div class="dir-box short-box"><div class="dl">全壘打</div><div class="dv" id="short-b4">—</div></div>
+      <div class="dir-box short-box"><div class="dl">場外</div><div class="dv" id="short-b5">—</div></div>
+    </div>
   </div>
 </div>
 
@@ -219,41 +283,90 @@ body{font-family:'Microsoft JhengHei','Segoe UI',sans-serif;background:#f0f2f5;c
     <p>· <strong>合理範圍</strong>：期貨預估 ×（1 ± 0.5%），作為開盤後的合理波動區間。</p>
     <p>· <strong>標準差震幅</strong>：歷史 10 日震幅的一個標準差，用來評估還有多少空間並決定提早停利時機。</p>
     <p>· <strong>美股漲跌幅</strong>：加權平均後預估台指開盤點數，評估台股強弱度與方向背離，決定偏多或偏空。</p>
-    <p>· <strong>當沖目標</strong>：三壘打 = 20日平均振幅；場外全壘打 = 近20日最大振幅（極端行情）。</p>
+    <p>· <strong>一壘打</strong>：近 20 日最小振幅 — 偏低能量日的合理目標。</p>
+    <p>· <strong>二壘打</strong>：低於平均振幅的日子的平均值 — 弱勢日合理目標。</p>
+    <p>· <strong>三壘打</strong>：20 日平均振幅 — 一般日的標準預期。</p>
+    <p>· <strong>全壘打</strong>：高於平均振幅的日子的平均值 — 強勢日合理目標。</p>
+    <p>· <strong>場外全壘打</strong>：近 20 日最大振幅 — 極端行情天花板。</p>
+    <p>· <strong>多方 / 空方目標</strong>：以 D+1 預估開盤 ±各壘打振幅，分別給出做多 / 做空獲利目標位。</p>
     <p>· <strong>權重與 R</strong>：調整後自動儲存至瀏覽器，重新整理後保留。</p>
+    <p>· <strong>日期切換</strong>：點擊右上角日期可查詢歷史快照（資料從 {{ earliest_db_date or '—' }} 起）。</p>
   </div>
 </div>
 
 <div class="footer">
-  自動更新 · {{ generated_at }} · 台指期資料來源 FinMind (TX) / 美股 yfinance
+  自動更新 · <span id="gen-at">{{ generated_at }}</span> · 台指期資料來源 FinMind (TX) / 美股 yfinance
 </div>
 </div>
 
 <script>
-// localStorage 只保留「你自訂的」欄位：權重與 R
+// ────────────────────────────────────────────────────────
+// 伺服器初始資料（Jinja2 注入，供 patchDOM 重算用）
+// ────────────────────────────────────────────────────────
+window._TARGETS = {{ targets | tojson }};
+window._CURRENT_ASOF = '{{ effective_date or asof_iso }}';
+
+// ────────────────────────────────────────────────────────
+// 輔助函式
+// ────────────────────────────────────────────────────────
+function roundHalfUp(x) { return Math.floor(x + 0.5); }
+
+function n(id) { return parseFloat(document.getElementById(id)?.value) || 0; }
+
+function setText(id, v) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = (v === null || v === undefined || v === '') ? '—' : v;
+}
+function setVal(id, v) {
+  const el = document.getElementById(id);
+  if (el && v !== null && v !== undefined) el.value = v;
+}
+
+function fmt(v, dec) {
+  if (v === null || v === undefined || isNaN(Number(v))) return '—';
+  return Number(v).toFixed(dec !== undefined ? dec : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function showToast(msg) {
+  const el = document.getElementById('_toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 3500);
+}
+
+function fmtDatetime(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit' });
+  } catch { return iso; }
+}
+
+// ────────────────────────────────────────────────────────
+// localStorage（只存使用者自訂欄位）
+// ────────────────────────────────────────────────────────
 const SAVE_KEYS = ['djW','nqW','spyW','tsmW','rR'];
 
-function load() {
+function loadPersistentState() {
   SAVE_KEYS.forEach(k => {
-    const v = localStorage.getItem('taifx_'+k);
-    if (v !== null) { const el = document.getElementById(k); if(el) el.value = v; }
+    const v = localStorage.getItem('taifx_' + k);
+    if (v !== null) { const el = document.getElementById(k); if (el) el.value = v; }
   });
 }
 
 function save() {
   SAVE_KEYS.forEach(k => {
     const el = document.getElementById(k);
-    if(el) localStorage.setItem('taifx_'+k, el.value);
+    if (el) localStorage.setItem('taifx_' + k, el.value);
   });
 }
 
-function n(id) { return parseFloat(document.getElementById(id).value) || 0; }
-
-function fmt(v, dec=2) {
-  if (isNaN(v)) return '—';
-  return v.toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
+// ────────────────────────────────────────────────────────
+// 計算（隨任何輸入變動即時重算）
+// ────────────────────────────────────────────────────────
 function calculate() {
   save();
 
@@ -264,36 +377,168 @@ function calculate() {
   const prev=n('prevClose');
   const a10=n('a10'), s10=n('s10');
 
-  const totalW = djW+nqW+spyW+tsmW;
+  const totalW = djW + nqW + spyW + tsmW;
   const wChg = totalW > 0
     ? (djC*djW + nqC*nqW + spyC*spyW + tsmC*tsmW) / totalW
     : 0;
 
-  const futEst = Math.round(prev * (1 + wChg/100));
-  const rLow  = Math.round(futEst * 0.995);
-  const rHigh = Math.round(futEst * 1.005);
+  const futEst = roundHalfUp(prev * (1 + wChg / 100));
+  const rLow  = roundHalfUp(futEst * 0.995);
+  const rHigh = roundHalfUp(futEst * 1.005);
 
   const sig1 = a10 + s10;
-  const sig2 = a10 + 2*s10;
-  const sig3 = a10 + 3*s10;
+  const sig2 = a10 + 2 * s10;
+  const sig3 = a10 + 3 * s10;
 
   const wEl = document.getElementById('wChg');
-  wEl.textContent = (wChg >= 0 ? '+' : '') + wChg.toFixed(2) + '%';
-  wEl.style.color = wChg >= 0 ? '#16a34a' : '#dc2626';
+  if (wEl) {
+    wEl.textContent = (wChg >= 0 ? '+' : '') + wChg.toFixed(2) + '%';
+    wEl.style.color = wChg >= 0 ? '#16a34a' : '#dc2626';
+  }
 
-  document.getElementById('futEst').textContent = futEst.toLocaleString();
-  document.getElementById('rLow').textContent = rLow.toLocaleString();
-  document.getElementById('rHigh').textContent = rHigh.toLocaleString();
+  setText('futEst', futEst.toLocaleString());
+  setText('rLow', rLow.toLocaleString());
+  setText('rHigh', rHigh.toLocaleString());
+  setText('sig1', fmt(sig1, 1));
+  setText('sig2', fmt(sig2, 1));
+  setText('sig3', fmt(sig3, 1));
 
-  document.getElementById('sig1').textContent = fmt(sig1);
-  document.getElementById('sig2').textContent = fmt(sig2);
-  document.getElementById('sig3').textContent = fmt(sig3);
-  // b1-b5 由 server 端提供，不在前端重算
+  // ── 多空目標 ──
+  const targets = window._TARGETS || {};
+  setText('open-price-display', futEst.toLocaleString());
+  ['b1','b2','b3','b4','b5'].forEach(k => {
+    const t = targets[k] || 0;
+    setText('long-'  + k, roundHalfUp(futEst + t).toLocaleString());
+    setText('short-' + k, roundHalfUp(futEst - t).toLocaleString());
+  });
 }
 
+// ────────────────────────────────────────────────────────
+// patchDOM：切換日期後更新快照欄位（不動 weights/R）
+// ────────────────────────────────────────────────────────
+function patchDOM(data) {
+  // 美股漲幅（snapshot-driven）
+  if (data.us) {
+    setVal('djC', data.us.dj);
+    setVal('nqC', data.us.nq);
+    setVal('spyC', data.us.spy);
+    setVal('tsmC', data.us.tsm);
+  }
+  setVal('prevClose', data.prev_close);
+
+  // 振幅統計
+  if (data.stats) {
+    setVal('a20', data.stats.a20);
+    setVal('a10', data.stats.a10);
+    setVal('a5',  data.stats.a5);
+    setVal('s20', data.stats.s20);
+    setVal('s10', data.stats.s10);
+    setVal('s5',  data.stats.s5);
+  }
+
+  // ATR
+  if (data.atr) {
+    setText('atr20', data.atr.atr20);
+    setText('atr10', data.atr.atr10);
+    setText('atr5',  data.atr.atr5);
+  }
+
+  // 當沖目標振幅
+  window._TARGETS = data.targets || {};
+  if (data.targets) {
+    ['b1','b2','b3','b4','b5'].forEach(k => setText('tgt-' + k, data.targets[k]));
+  }
+
+  // 週別振幅
+  if (data.weekday) {
+    ['mon','tue','wed','thu','fri'].forEach(wd => setText('wd-' + wd, data.weekday[wd]));
+  }
+
+  // 旗幟 banners
+  const staleBanner = document.getElementById('stale-banner');
+  if (staleBanner) staleBanner.hidden = !data.is_stale;
+
+  const adjBanner = document.getElementById('adj-banner');
+  if (adjBanner) {
+    if (data.asof_adjusted_from) {
+      adjBanner.hidden = false;
+      adjBanner.textContent = `⚠️ ${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date}）`;
+    } else {
+      adjBanner.hidden = true;
+    }
+  }
+
+  // 資料來源標籤
+  const dsEl = document.getElementById('data-source-badge');
+  if (dsEl) dsEl.textContent = data.data_source === 'live' ? 'LIVE' : 'DB';
+
+  // 頁尾時間
+  setText('gen-at', fmtDatetime(data.generated_at));
+}
+
+// ────────────────────────────────────────────────────────
+// switchDate：AbortController + latest-wins token
+// ────────────────────────────────────────────────────────
+let _currentController = null;
+let _latestToken = 0;
+let _currentDisplayedAsof = window._CURRENT_ASOF;
+
+async function switchDate(asof) {
+  if (_currentController) _currentController.abort();
+  const myToken = ++_latestToken;
+  _currentController = new AbortController();
+  document.body.classList.add('loading');
+  try {
+    const res = await fetch('/api/snapshot?asof=' + asof, { signal: _currentController.signal });
+    if (myToken !== _latestToken) return;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const code = body.detail?.code || body.detail || res.status;
+      showToast(`無法載入 ${asof}：${code}`);
+      // 還原 date input 到目前顯示的日期
+      const dateEl = document.getElementById('openDate');
+      if (dateEl && _currentDisplayedAsof) dateEl.value = _currentDisplayedAsof;
+      return;
+    }
+    const data = await res.json();
+    if (myToken !== _latestToken) return;
+    patchDOM(data);
+    loadPersistentState();   // 套回 localStorage 的 weights/R
+    calculate();             // 重算多空目標
+    _currentDisplayedAsof = data.resolved_effective_date || asof;
+    if (data.asof_adjusted_from) {
+      showToast(`${data.asof_adjusted_from} 資料尚未入庫，顯示 ${data.resolved_effective_date}`);
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    if (myToken !== _latestToken) return;
+    showToast('網路錯誤，請稍後再試');
+  } finally {
+    if (myToken === _latestToken) {
+      document.body.classList.remove('loading');
+      _currentController = null;
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────
+// 初始化
+// ────────────────────────────────────────────────────────
 document.querySelectorAll('input').forEach(el => el.addEventListener('input', calculate));
 
-load();
+// 日期切換
+document.getElementById('openDate').addEventListener('change', function() {
+  const val = this.value;
+  if (val) switchDate(val);
+});
+
+// 格式化頁尾時間（初始 server render 的 ISO 字串）
+(function() {
+  const el = document.getElementById('gen-at');
+  if (el) el.textContent = fmtDatetime(el.textContent.trim()) || el.textContent;
+})();
+
+loadPersistentState();
 calculate();
 </script>
 </body>
