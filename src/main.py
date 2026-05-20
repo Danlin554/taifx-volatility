@@ -116,7 +116,9 @@ def _validate_live_raw(data: dict, observed_at: datetime.datetime) -> dict:
             raise LivePublishValidationError(
                 f"us last session {us_last} != expected NYSE session for effective_date "
                 f"{effective_date} (expected {expected_us_last}); refusing to publish — "
-                f"either wait for NYSE close or accept a snapshot with earlier effective_date"
+                f"either wait for NYSE close or accept a snapshot with earlier effective_date",
+                kind="us_session_mismatch_for_effective_date",
+                effective_date=effective_date,
             )
 
     # (b) partial-session leakage gate
@@ -125,7 +127,9 @@ def _validate_live_raw(data: dict, observed_at: datetime.datetime) -> dict:
             raise LivePublishValidationError(
                 f"expected NYSE session for effective_date {effective_date} is "
                 f"{expected_us_last}, but only {completed_us} has completed at "
-                f"{observed_at.isoformat()} — refusing to publish (partial-session leakage risk)"
+                f"{observed_at.isoformat()} — refusing to publish (partial-session leakage risk)",
+                kind="partial_session_leakage",
+                effective_date=effective_date,
             )
 
     # (b2) R6 #2：completed_us 可用但 expected 不可用時的保底檢查
@@ -524,12 +528,30 @@ def publish_snapshot(snapshot: dict, data: dict[str, pd.DataFrame]) -> None:
 # Orchestration
 # ---------------------------------------------------------------------------
 
+_FALLBACK_KINDS = {"partial_session_leakage", "us_session_mismatch_for_effective_date"}
+
+
 async def refresh_and_publish() -> dict:
-    """Cron / startup / 手動 /refresh 都呼叫這個。整個流程用 _REFRESH_LOCK 序列化。"""
+    """Cron / startup / 手動 /refresh 都呼叫這個。整個流程用 _REFRESH_LOCK 序列化。
+
+    若 _validate_live_raw 因「effective_date=D 但 NYSE D 尚未收盤」失敗，
+    自動 trim txf 最後一列（有效降級到 effective_date=D-1）後重試一次。
+    """
     async with _REFRESH_LOCK:
         observed_at = datetime.datetime.now(config.TZ)
         data = await asyncio.to_thread(fetch_live_data)
-        validation = _validate_live_raw(data, observed_at)
+        try:
+            validation = _validate_live_raw(data, observed_at)
+        except LivePublishValidationError as e:
+            if e.kind not in _FALLBACK_KINDS or len(data["txf"]) <= 1:
+                raise
+            log.warning(
+                "refresh_and_publish: %s for effective_date=%s; "
+                "trimming txf to D-1 and retrying once",
+                e.kind, e.effective_date,
+            )
+            data = {**data, "txf": data["txf"].iloc[:-1]}
+            validation = _validate_live_raw(data, observed_at)  # 第二次失敗直接 propagate
         earliest = _resolve_earliest_for_live(data)
         snapshot = build_snapshot_from_data(
             data,
@@ -591,7 +613,11 @@ def build_snapshot(
 
 async def _startup_refresh():
     try:
-        await refresh_and_publish()
+        snapshot = await refresh_and_publish()
+        log.info(
+            "startup refresh succeeded effective_date=%s us_session_date=%s",
+            snapshot.get("effective_date"), snapshot.get("us_session_date"),
+        )
     except Exception as e:
         log.warning("startup refresh failed: %s", e)
 

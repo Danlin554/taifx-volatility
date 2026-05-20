@@ -36,5 +36,20 @@ class InsufficientDataError(Exception):
 
 
 class LivePublishValidationError(Exception):
-    """live publish 前的原始資料驗證失敗（不寫 DB、不更新 cache）。"""
-    pass
+    """live publish 前的原始資料驗證失敗（不寫 DB、不更新 cache）。
+
+    kind 允許值（None = 其他不可 fallback 情境）：
+      "partial_session_leakage"                — expected NYSE session 尚未收盤
+      "us_session_mismatch_for_effective_date" — US last session != expected for effective_date
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str | None = None,
+        effective_date: "datetime.date | None" = None,
+    ):
+        super().__init__(message)
+        self.kind = kind
+        self.effective_date = effective_date

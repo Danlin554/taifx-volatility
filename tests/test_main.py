@@ -464,11 +464,13 @@ class TestValidateLiveRaw:
             mock_xtai = MagicMock()
             mock_xtai.is_session.return_value = True
             mock_cal.return_value = mock_xtai
-            with pytest.raises(LivePublishValidationError, match="expected NYSE session"):
+            with pytest.raises(LivePublishValidationError, match="expected NYSE session") as exc_info:
                 _validate_live_raw(data, observed_at)
+            assert exc_info.value.kind == "us_session_mismatch_for_effective_date"
+            assert exc_info.value.effective_date == datetime.date(2026, 5, 19)
 
     def test_partial_session_leakage_raises(self):
-        """expected_us > completed_us（NYSE D 尚未收盤）→ raise。"""
+        """expected_us > completed_us（NYSE D 尚未收盤）→ raise with kind='partial_session_leakage'。"""
         data = _make_data(txf_last="2026-05-19", us_last="2026-05-19")
         observed_at = self._observed_at("2026-05-19T16:00:00")  # TPE D 16:00
 
@@ -483,8 +485,10 @@ class TestValidateLiveRaw:
             mock_xtai = MagicMock()
             mock_xtai.is_session.return_value = True
             mock_cal.return_value = mock_xtai
-            with pytest.raises(LivePublishValidationError, match="partial-session leakage"):
+            with pytest.raises(LivePublishValidationError, match="partial-session leakage") as exc_info:
                 _validate_live_raw(data, observed_at)
+        assert exc_info.value.kind == "partial_session_leakage"
+        assert exc_info.value.effective_date == datetime.date(2026, 5, 19)
 
     def test_calendar_unavailable_fail_closed_by_default(self):
         """expected_us_last=None、ALLOW_DEGRADED_US_SESSION=False → raise。"""
@@ -641,3 +645,144 @@ class TestValidateSnapshotOutputStrict:
         snap["weekday_multi"]["m6"] = None
         with pytest.raises(LivePublishValidationError):
             _validate_snapshot_output_strict(snap)
+
+
+# ---------------------------------------------------------------------------
+# refresh_and_publish fallback
+# ---------------------------------------------------------------------------
+
+async def _to_thread(fn, *args, **kw):
+    """asyncio.to_thread 的測試替代品：直接同步呼叫 fn，避免線程池開銷。"""
+    return fn(*args, **kw)
+
+
+class TestRefreshAndPublishFallback:
+    """HF-1：partial-session leakage 時自動降級到 effective_date=D-1。"""
+
+    def _observed_at(self, iso: str = "2026-05-19T22:35:00+08:00") -> datetime.datetime:
+        return datetime.datetime.fromisoformat(iso)
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_d_minus_1_on_partial_session_leakage(self):
+        """
+        第一次 _validate_live_raw raise kind='partial_session_leakage' →
+        trim txf 最後一列 → 第二次驗過 → publish 被呼叫。
+        """
+        from src.main import refresh_and_publish
+
+        data_full = _make_data(txf_last="2026-05-19", us_last="2026-05-18")
+        observed_at = self._observed_at()
+
+        validation_ok = {
+            "txf_calendar_validation_mode": "strict",
+            "us_calendar_validation_mode": "strict",
+        }
+
+        call_count = {"validate": 0}
+
+        def mock_validate(data, obs):
+            call_count["validate"] += 1
+            if call_count["validate"] == 1:
+                raise LivePublishValidationError(
+                    "partial-session leakage risk",
+                    kind="partial_session_leakage",
+                    effective_date=datetime.date(2026, 5, 19),
+                )
+            return validation_ok
+
+        with patch("src.main.fetch_live_data", return_value=data_full), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("src.main.build_snapshot_from_data", return_value=_FIXTURE_SNAPSHOT), \
+             patch("src.main._resolve_earliest_for_live", return_value=None), \
+             patch("src.main.publish_snapshot") as mock_publish, \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = observed_at
+            mock_dt.date = datetime.date
+            await refresh_and_publish()
+
+        assert call_count["validate"] == 2, "第二次 _validate_live_raw 應被呼叫"
+        mock_publish.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_kind_is_none(self):
+        """
+        kind=None（如 rows<130）→ 直接 propagate，不 trim 不 retry。
+        """
+        from src.main import refresh_and_publish
+
+        data = _make_data()
+        validate_call_count = [0]
+
+        def mock_validate(d, obs):
+            validate_call_count[0] += 1
+            raise LivePublishValidationError("txf rows 50 < 130", kind=None)
+
+        with patch("src.main.fetch_live_data", return_value=data), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = self._observed_at()
+            mock_dt.date = datetime.date
+            with pytest.raises(LivePublishValidationError, match="130"):
+                await refresh_and_publish()
+
+        assert validate_call_count[0] == 1, "rows<130 不應 retry"
+
+    @pytest.mark.asyncio
+    async def test_fallback_propagates_if_second_validation_fails(self):
+        """
+        第一次 partial_session_leakage → trim → 第二次仍失敗 → propagate。
+        """
+        from src.main import refresh_and_publish
+
+        data = _make_data(txf_last="2026-05-19", us_last="2026-05-18")
+        call_count = [0]
+
+        def mock_validate(d, obs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise LivePublishValidationError(
+                    "partial-session leakage risk",
+                    kind="partial_session_leakage",
+                    effective_date=datetime.date(2026, 5, 19),
+                )
+            raise LivePublishValidationError("NYSE calendar unavailable", kind=None)
+
+        with patch("src.main.fetch_live_data", return_value=data), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("src.main.publish_snapshot") as mock_publish, \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = self._observed_at()
+            mock_dt.date = datetime.date
+            with pytest.raises(LivePublishValidationError, match="NYSE calendar unavailable"):
+                await refresh_and_publish()
+
+        mock_publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_txf_too_short_to_trim(self):
+        """
+        txf 只剩 1 列時，kind='partial_session_leakage' → 直接 propagate（沒得 trim）。
+        """
+        from src.main import refresh_and_publish
+
+        data = _make_data()
+        data = {**data, "txf": data["txf"].iloc[:1]}  # 只剩 1 列
+
+        def mock_validate(d, obs):
+            raise LivePublishValidationError(
+                "partial-session leakage risk",
+                kind="partial_session_leakage",
+                effective_date=datetime.date(2026, 5, 19),
+            )
+
+        with patch("src.main.fetch_live_data", return_value=data), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = self._observed_at()
+            mock_dt.date = datetime.date
+            with pytest.raises(LivePublishValidationError, match="partial-session"):
+                await refresh_and_publish()
