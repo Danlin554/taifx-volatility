@@ -556,10 +556,21 @@ async def refresh_and_publish() -> dict:
                 raise
             log.warning(
                 "refresh_and_publish: %s for effective_date=%s; "
-                "trimming txf to D-1 and retrying once",
+                "trimming txf and any US partial bars to D-1, retrying once",
                 e.kind, e.effective_date,
             )
-            data = {**data, "txf": data["txf"].iloc[:-1]}
+            data = dict(data)
+            data["txf"] = data["txf"].iloc[:-1]
+            new_effective = data["txf"].index[-1].date()
+            # 計算新的 US trim 上限：calendar 不可用時保守用 new_effective
+            new_expected_us = freshness.expected_us_session_for_effective_date(new_effective)
+            us_trim_target = new_expected_us if new_expected_us is not None else new_effective
+            for k in config.US_SYMBOLS:
+                df = data[k]
+                trimmed = df[df.index.date <= us_trim_target]
+                if len(trimmed) < 2:
+                    raise  # US trim 過頭，propagate 原 exception
+                data[k] = trimmed
             # skip_staleness=True：D-1 相對於現在是「stale」但這是刻意降級，不是 ingestion gap
             validation = _validate_live_raw(data, observed_at, skip_staleness=True)  # 第二次失敗直接 propagate
         earliest = _resolve_earliest_for_live(data)

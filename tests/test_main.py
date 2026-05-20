@@ -786,3 +786,219 @@ class TestRefreshAndPublishFallback:
             mock_dt.date = datetime.date
             with pytest.raises(LivePublishValidationError, match="partial-session"):
                 await refresh_and_publish()
+
+    @pytest.mark.asyncio
+    async def test_fallback_trims_us_partial_bar(self):
+        """
+        HF-2：yfinance 回傳 US partial bar（TXF=5/20、US=5/20）→
+        fallback 後 TXF 與 US 都被 trim 到 5/19。
+        """
+        from src.main import refresh_and_publish
+
+        # TXF 最後=5/20；US 3 列（5/18、5/19、5/20 partial bar）
+        txf_d = "2026-05-20"
+        us_d = "2026-05-20"
+        data_full = {
+            "txf": _make_txf(last_date=txf_d),
+            "dj": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "nq": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "spy": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "tsm": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+        }
+        observed_at = self._observed_at("2026-05-20T22:16:00+08:00")
+        validation_ok = {
+            "txf_calendar_validation_mode": "strict",
+            "us_calendar_validation_mode": "strict",
+        }
+        call_count = {"validate": 0}
+        published_data = {}
+
+        def mock_validate(data, obs, *, skip_staleness=False):
+            call_count["validate"] += 1
+            if call_count["validate"] == 1:
+                raise LivePublishValidationError(
+                    "partial-session leakage risk",
+                    kind="partial_session_leakage",
+                    effective_date=datetime.date(2026, 5, 20),
+                )
+            return validation_ok
+
+        def mock_publish(snapshot, data):
+            published_data.update(data)
+
+        with patch("src.main.fetch_live_data", return_value=data_full), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("src.main.build_snapshot_from_data", return_value=_FIXTURE_SNAPSHOT), \
+             patch("src.main._resolve_earliest_for_live", return_value=None), \
+             patch("src.main.freshness") as mock_freshness, \
+             patch("src.main.publish_snapshot", side_effect=mock_publish), \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = observed_at
+            mock_dt.date = datetime.date
+            # expected_us_session_for_effective_date(2026-05-19) → 2026-05-19
+            mock_freshness.expected_us_session_for_effective_date.return_value = datetime.date(2026, 5, 19)
+            await refresh_and_publish()
+
+        assert call_count["validate"] == 2, "應觸發一次 fallback + 一次重試"
+        assert published_data["txf"].index[-1].date() == datetime.date(2026, 5, 19), \
+            "TXF 最後一筆應為 5/19"
+        for k in ("dj", "nq", "spy", "tsm"):
+            assert published_data[k].index[-1].date() == datetime.date(2026, 5, 19), \
+                f"US[{k}] 最後一筆應為 5/19"
+
+    @pytest.mark.asyncio
+    async def test_fallback_propagates_when_us_trim_leaves_lt_2_rows(self):
+        """
+        HF-2：US trim 後剩不足 2 列 → propagate 原 exception，不發布。
+        """
+        from src.main import refresh_and_publish
+
+        # US 只有 2 列（5/19 + 5/20），trim 5/20 後剩 1 列 → 觸發 propagate
+        data_full = {
+            "txf": _make_txf(last_date="2026-05-20"),
+            "dj": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "nq": _make_us(last_date="2026-05-20"),
+            "spy": _make_us(last_date="2026-05-20"),
+            "tsm": _make_us(last_date="2026-05-20"),
+        }
+        observed_at = self._observed_at("2026-05-20T22:16:00+08:00")
+        original_error = LivePublishValidationError(
+            "partial-session leakage risk",
+            kind="partial_session_leakage",
+            effective_date=datetime.date(2026, 5, 20),
+        )
+
+        def mock_validate(data, obs, *, skip_staleness=False):
+            raise original_error
+
+        with patch("src.main.fetch_live_data", return_value=data_full), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("src.main.freshness") as mock_freshness, \
+             patch("src.main.publish_snapshot") as mock_publish, \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = observed_at
+            mock_dt.date = datetime.date
+            mock_freshness.expected_us_session_for_effective_date.return_value = datetime.date(2026, 5, 19)
+            with pytest.raises(LivePublishValidationError, match="partial-session"):
+                await refresh_and_publish()
+
+        mock_publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fallback_uses_new_effective_when_xnys_calendar_unavailable(self):
+        """
+        HF-2：XNYS calendar 不可用（expected_us=None）→ US 改用 new_effective 為上限 trim。
+        """
+        from src.main import refresh_and_publish
+
+        data_full = {
+            "txf": _make_txf(last_date="2026-05-20"),
+            "dj": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "nq": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "spy": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+            "tsm": pd.DataFrame(
+                {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+                index=pd.DatetimeIndex([
+                    pd.Timestamp("2026-05-18"),
+                    pd.Timestamp("2026-05-19"),
+                    pd.Timestamp("2026-05-20"),
+                ]),
+            ),
+        }
+        observed_at = self._observed_at("2026-05-20T22:16:00+08:00")
+        validation_ok = {
+            "txf_calendar_validation_mode": "strict",
+            "us_calendar_validation_mode": "strict",
+        }
+        call_count = {"validate": 0}
+        published_data = {}
+
+        def mock_validate(data, obs, *, skip_staleness=False):
+            call_count["validate"] += 1
+            if call_count["validate"] == 1:
+                raise LivePublishValidationError(
+                    "partial-session leakage risk",
+                    kind="partial_session_leakage",
+                    effective_date=datetime.date(2026, 5, 20),
+                )
+            return validation_ok
+
+        def mock_publish(snapshot, data):
+            published_data.update(data)
+
+        with patch("src.main.fetch_live_data", return_value=data_full), \
+             patch("src.main.datetime") as mock_dt, \
+             patch("src.main._validate_live_raw", side_effect=mock_validate), \
+             patch("src.main.build_snapshot_from_data", return_value=_FIXTURE_SNAPSHOT), \
+             patch("src.main._resolve_earliest_for_live", return_value=None), \
+             patch("src.main.freshness") as mock_freshness, \
+             patch("src.main.publish_snapshot", side_effect=mock_publish), \
+             patch("asyncio.to_thread", new=_to_thread):
+            mock_dt.datetime.now.return_value = observed_at
+            mock_dt.date = datetime.date
+            # XNYS calendar 不可用 → None，fallback 用 new_effective=5/19 當上限
+            mock_freshness.expected_us_session_for_effective_date.return_value = None
+            await refresh_and_publish()
+
+        assert call_count["validate"] == 2
+        for k in ("dj", "nq", "spy", "tsm"):
+            last = published_data[k].index[-1].date()
+            assert last <= datetime.date(2026, 5, 19), \
+                f"US[{k}] 最後一筆 {last} 應 <= new_effective 2026-05-19"
