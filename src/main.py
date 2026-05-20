@@ -35,9 +35,18 @@ def fetch_live_data() -> dict[str, pd.DataFrame]:
 # Raw data validation（live 路徑專用）
 # ---------------------------------------------------------------------------
 
-def _validate_live_raw(data: dict, observed_at: datetime.datetime) -> dict:
+def _validate_live_raw(
+    data: dict,
+    observed_at: datetime.datetime,
+    *,
+    skip_staleness: bool = False,
+) -> dict:
     """驗證 live fetch 原始資料；通過則回 {txf_calendar_validation_mode, us_calendar_validation_mode}。
     任一條件不符 → raise LivePublishValidationError。
+
+    skip_staleness=True：跳過 TXF staleness / future-bar / calendar-degraded 三項檢查。
+    用於 refresh_and_publish 的 D-1 fallback：trim 後的 txf 相對於 now 已知「落後」，
+    但這是刻意降級（非 ingestion gap），不需要再做 staleness 判斷。
     """
     txf = data["txf"]
 
@@ -62,29 +71,29 @@ def _validate_live_raw(data: dict, observed_at: datetime.datetime) -> dict:
     if txf[["high", "low", "close"]].tail(20).isna().any().any():
         raise LivePublishValidationError("txf last-20 has NaN in high/low/close")
 
-    # TXF freshness
-    fresh = freshness.check_freshness(txf, observed_at=observed_at)
-    if fresh["is_stale"]:
-        raise LivePublishValidationError(
-            f"txf last trade {txf.index[-1].date()} lags expected {fresh['expected_trade_date']}"
-        )
-    # R8 #1：partial/future TXF bar
-    if fresh["mode"] == "normal" and fresh["expected_trade_date"] is not None:
-        if txf.index[-1].date() > fresh["expected_trade_date"]:
-            raise LivePublishValidationError(
-                f"txf last trade {txf.index[-1].date()} is ahead of expected "
-                f"{fresh['expected_trade_date']} — partial or future TXF bar detected"
-            )
-
-    # R5 #2 / R6 #4：XTAI calendar degraded → fail-closed（除非 ALLOW_DEGRADED_TXF_FRESHNESS）
+    # TXF freshness（fallback 路徑跳過：trim 到 D-1 是刻意降級，非 ingestion gap）
     txf_calendar_validation_mode = "strict"
-    if fresh["mode"] != "normal":
-        if not config.ALLOW_DEGRADED_TXF_FRESHNESS:
+    if not skip_staleness:
+        fresh = freshness.check_freshness(txf, observed_at=observed_at)
+        if fresh["is_stale"]:
             raise LivePublishValidationError(
-                f"TXF freshness calendar degraded (mode={fresh['mode']}); "
-                "refusing to publish live snapshot (set ALLOW_DEGRADED_TXF_FRESHNESS=1 to override)"
+                f"txf last trade {txf.index[-1].date()} lags expected {fresh['expected_trade_date']}"
             )
-        txf_calendar_validation_mode = "degraded_override"
+        # R8 #1：partial/future TXF bar
+        if fresh["mode"] == "normal" and fresh["expected_trade_date"] is not None:
+            if txf.index[-1].date() > fresh["expected_trade_date"]:
+                raise LivePublishValidationError(
+                    f"txf last trade {txf.index[-1].date()} is ahead of expected "
+                    f"{fresh['expected_trade_date']} — partial or future TXF bar detected"
+                )
+        # R5 #2 / R6 #4：XTAI calendar degraded → fail-closed（除非 ALLOW_DEGRADED_TXF_FRESHNESS）
+        if fresh["mode"] != "normal":
+            if not config.ALLOW_DEGRADED_TXF_FRESHNESS:
+                raise LivePublishValidationError(
+                    f"TXF freshness calendar degraded (mode={fresh['mode']}); "
+                    "refusing to publish live snapshot (set ALLOW_DEGRADED_TXF_FRESHNESS=1 to override)"
+                )
+            txf_calendar_validation_mode = "degraded_override"
 
     # US series 基本驗證
     for k in config.US_SYMBOLS:
@@ -551,7 +560,8 @@ async def refresh_and_publish() -> dict:
                 e.kind, e.effective_date,
             )
             data = {**data, "txf": data["txf"].iloc[:-1]}
-            validation = _validate_live_raw(data, observed_at)  # 第二次失敗直接 propagate
+            # skip_staleness=True：D-1 相對於現在是「stale」但這是刻意降級，不是 ingestion gap
+            validation = _validate_live_raw(data, observed_at, skip_staleness=True)  # 第二次失敗直接 propagate
         earliest = _resolve_earliest_for_live(data)
         snapshot = build_snapshot_from_data(
             data,

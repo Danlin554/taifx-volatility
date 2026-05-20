@@ -680,7 +680,7 @@ class TestRefreshAndPublishFallback:
 
         call_count = {"validate": 0}
 
-        def mock_validate(data, obs):
+        def mock_validate(data, obs, *, skip_staleness=False):
             call_count["validate"] += 1
             if call_count["validate"] == 1:
                 raise LivePublishValidationError(
@@ -714,7 +714,7 @@ class TestRefreshAndPublishFallback:
         data = _make_data()
         validate_call_count = [0]
 
-        def mock_validate(d, obs):
+        def mock_validate(d, obs, *, skip_staleness=False):
             validate_call_count[0] += 1
             raise LivePublishValidationError("txf rows 50 < 130", kind=None)
 
@@ -739,7 +739,7 @@ class TestRefreshAndPublishFallback:
         data = _make_data(txf_last="2026-05-19", us_last="2026-05-18")
         call_count = [0]
 
-        def mock_validate(d, obs):
+        def mock_validate(d, obs, *, skip_staleness=False):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise LivePublishValidationError(
@@ -771,7 +771,7 @@ class TestRefreshAndPublishFallback:
         data = _make_data()
         data = {**data, "txf": data["txf"].iloc[:1]}  # 只剩 1 列
 
-        def mock_validate(d, obs):
+        def mock_validate(d, obs, *, skip_staleness=False):
             raise LivePublishValidationError(
                 "partial-session leakage risk",
                 kind="partial_session_leakage",
