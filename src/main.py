@@ -71,6 +71,14 @@ def _validate_live_raw(
     if txf[["high", "low", "close"]].tail(20).isna().any().any():
         raise LivePublishValidationError("txf last-20 has NaN in high/low/close")
 
+    # B5.2.b OHLC 完整性檢查（open finite、四欄 > 0、h>=max(o,c)、l<=min(o,c)）
+    ohlc_violations = compute.validate_txf_ohlc_frame(txf, tail=20)
+    if ohlc_violations:
+        raise LivePublishValidationError(
+            "txf OHLC integrity check failed: " + "; ".join(ohlc_violations[:5]),
+            kind="ohlc_integrity",
+        )
+
     # TXF freshness（fallback 路徑跳過：trim 到 D-1 是刻意降級，非 ingestion gap）
     txf_calendar_validation_mode = "strict"
     if not skip_staleness:
@@ -212,6 +220,20 @@ def _required_nan_fields(snapshot: dict) -> list[tuple[str, str, object]]:
     else:
         for wd in ("mon", "tue", "wed", "thu", "fri"):
             required.append(("weekday_multi.m6", wd, m6.get(wd)))
+    # B5.2 新欄位：txf_ohlc{o,h,l,c} 與 us_data.<k>.close 不可缺
+    txf_ohlc = snapshot.get("txf_ohlc")
+    if not isinstance(txf_ohlc, dict):
+        required.append(("root", "txf_ohlc", txf_ohlc))
+    else:
+        for k in ("open", "high", "low", "close"):
+            required.append(("txf_ohlc", k, txf_ohlc.get(k)))
+    us_data = snapshot.get("us_data")
+    if not isinstance(us_data, dict):
+        required.append(("root", "us_data", us_data))
+    else:
+        for sym in ("dj", "nq", "spy", "tsm"):
+            sub = us_data.get(sym, {})
+            required.append((f"us_data.{sym}", "close", sub.get("close") if isinstance(sub, dict) else None))
     return required
 
 
@@ -278,6 +300,16 @@ def read_db_data(
         e.code = "insufficient_data"
         raise
     resolved_effective_date = data["txf"].index[-1].date()
+
+    # B5.2.b OHLC 完整性檢查（DB 路徑；違反 → 視為 DB 資料污染，回 422）
+    ohlc_violations = compute.validate_txf_ohlc_frame(data["txf"], tail=20)
+    if ohlc_violations:
+        raise InsufficientDataError(
+            earliest=db.earliest_trade_date(config.TXF_SYMBOL),
+            code="ohlc_integrity_db",
+            asof=asof,
+            missing_fields=ohlc_violations[:5],
+        )
 
     # Step 2: TXFR1 缺洞檢查（過去交易日缺洞才 raise；今日 / 非交易日 / calendar 不可用 allow fallback）
     asof_is_trading_day = freshness.is_trading_day(asof)  # True | False | None
@@ -450,6 +482,38 @@ def build_snapshot_from_data(
     unique_us_dates = set(us_session_dates.values())
     us_session_date_val = next(iter(unique_us_dates)) if len(unique_us_dates) == 1 else None
 
+    # B5.2.a 台指期完整 OHLC + 商品標籤
+    txf_ohlc = {
+        "date":  effective.isoformat(),
+        "open":  float(txf["open"].iloc[-1]),
+        "high":  float(txf["high"].iloc[-1]),
+        "low":   float(txf["low"].iloc[-1]),
+        "close": float(txf["close"].iloc[-1]),
+    }
+    txf_symbol_label = "大臺近月（TXFR1）日盤"
+
+    # B5.2.a 美股個別 close + 日期 + pct
+    us_data = {
+        k: {
+            "date":  data[k].index[-1].date().isoformat(),
+            "close": float(data[k]["close"].iloc[-1]),
+            "pct":   us_pcts[k],
+        }
+        for k in config.US_SYMBOLS
+    }
+
+    # B5.2.c NYSE close 台北時間（DST/半日交易日自動推導；calendar 不可用 → None）
+    us_session_close_tpe = None
+    if us_session_date_val:
+        try:
+            us_close_dt = freshness.compute_us_session_close_tpe(
+                datetime.date.fromisoformat(us_session_date_val)
+            )
+            if us_close_dt is not None:
+                us_session_close_tpe = us_close_dt.isoformat()
+        except Exception:
+            us_session_close_tpe = None
+
     snapshot = {
         # 舊欄位（保留 backward-compat）
         "asof_iso": effective.isoformat(),
@@ -479,6 +543,11 @@ def build_snapshot_from_data(
         "earliest_db_date": earliest_db_date.isoformat() if earliest_db_date is not None else None,
         "us_session_dates": us_session_dates,
         "us_session_date": us_session_date_val,
+        # B5.2.a 新欄位（additive）
+        "txf_ohlc": txf_ohlc,
+        "txf_symbol_label": txf_symbol_label,
+        "us_data": us_data,
+        "us_session_close_tpe": us_session_close_tpe,
         "data_source": source,
         "is_stale": False,  # live 通過驗證即非 stale；db 用 historical 模式不判 stale
         "freshness_mode": freshness_mode,

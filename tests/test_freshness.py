@@ -30,6 +30,49 @@ def _tpe(dt_str: str) -> datetime.datetime:
 
 
 # ---------------------------------------------------------------------------
+# compute_us_session_close_tpe（B5.2.c）
+# ---------------------------------------------------------------------------
+
+class TestComputeUsSessionCloseTpe:
+    """NYSE close 對應台北時間：DST + 半日交易日 + calendar 不可用。"""
+
+    def test_dst_summer_regular_close(self):
+        """EDT（夏令）：NYSE 16:00 ET → 20:00 UTC → 台北隔日 04:00。"""
+        result = freshness.compute_us_session_close_tpe(datetime.date(2026, 5, 19))
+        assert result is not None
+        assert result.hour == 4
+        assert result.minute == 0
+        assert result.date() == datetime.date(2026, 5, 20)
+
+    def test_dst_winter_regular_close(self):
+        """EST（冬令）：NYSE 16:00 ET → 21:00 UTC → 台北隔日 05:00。"""
+        result = freshness.compute_us_session_close_tpe(datetime.date(2026, 1, 15))
+        assert result is not None
+        assert result.hour == 5
+        assert result.minute == 0
+        assert result.date() == datetime.date(2026, 1, 16)
+
+    def test_black_friday_half_day(self):
+        """Black Friday 半日 13:00 EST → 18:00 UTC → 台北隔日 02:00。"""
+        result = freshness.compute_us_session_close_tpe(datetime.date(2025, 11, 28))
+        assert result is not None
+        assert result.hour == 2
+        assert result.minute == 0
+        assert result.date() == datetime.date(2025, 11, 29)
+
+    def test_calendar_unavailable_returns_none(self):
+        """Calendar 不可用 → None，不 raise，讓前端 fallback。"""
+        with patch.object(freshness, "_get_calendar", side_effect=RuntimeError("no calendar")):
+            result = freshness.compute_us_session_close_tpe(datetime.date(2026, 5, 19))
+            assert result is None
+
+    def test_non_session_date_returns_none(self):
+        """非 NYSE session（週六）→ None。"""
+        result = freshness.compute_us_session_close_tpe(datetime.date(2026, 5, 23))
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
 # check_freshness
 # ---------------------------------------------------------------------------
 

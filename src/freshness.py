@@ -129,6 +129,23 @@ def previous_nyse_session(d: datetime.date) -> datetime.date | None:
         return None
 
 
+def compute_us_session_close_tpe(session_date: datetime.date) -> datetime.datetime | None:
+    """回傳 NYSE 該 session 的收盤對應台北時間（DST + 半日交易日自動處理）。
+
+    XNYS.session_close() 回傳 UTC-aware Timestamp，astimezone(TZ) 轉台北。
+    半日交易日（Black Friday、Christmas Eve、Independence Day eve）由 calendar 自動推導。
+    Calendar 不可用 → None（前端 fallback「NYSE 收盤後」）。
+    """
+    from src import config
+
+    try:
+        xnys = _get_calendar("XNYS")
+        close_ts = xnys.session_close(pd.Timestamp(session_date))
+        return close_ts.astimezone(config.TZ).to_pydatetime()
+    except Exception:
+        return None
+
+
 def expected_us_session_for_effective_date(
     effective_date: datetime.date,
 ) -> datetime.date | None:

@@ -3,6 +3,10 @@ import pytz
 
 TZ = pytz.timezone("Asia/Taipei")
 
+
+def _truthy(s: str) -> bool:
+    return s.lower() in {"1", "true", "yes", "on"}
+
 # 美股指數（yfinance symbols），用於計算預估開盤
 US_SYMBOLS = {
     "dj": "^DJI",
@@ -34,3 +38,9 @@ DATABASE_URL  = os.getenv("DATABASE_URL", "")
 # Live publish 降級旗標（預設 fail-closed）
 ALLOW_DEGRADED_TXF_FRESHNESS: bool = bool(os.getenv("ALLOW_DEGRADED_TXF_FRESHNESS", ""))
 ALLOW_DEGRADED_US_SESSION: bool = bool(os.getenv("ALLOW_DEGRADED_US_SESSION", ""))
+
+# TXF 資料源旗標（B5.1）
+# FORCE_FINMIND_TXF=1 → 直接走 FinMind，跳過富邦（緊急止血用）
+# FUBON_TXF_VERIFIED=1 → 富邦 SDK session 參數已驗證可用，啟用富邦路徑（B5.1 步驟 4 完成後才設）
+FORCE_FINMIND_TXF: bool = _truthy(os.getenv("FORCE_FINMIND_TXF", ""))
+FUBON_TXF_VERIFIED: bool = _truthy(os.getenv("FUBON_TXF_VERIFIED", ""))

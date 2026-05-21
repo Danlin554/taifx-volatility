@@ -175,22 +175,89 @@ def _fetch_txf_finmind(lookback_days: int) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 富邦資料污染偵測（B5.1 Auto-fallback）
+# ---------------------------------------------------------------------------
+# 用 FinMind 純日盤資料作為外部 baseline，比對富邦最新 5 日 OHLC。
+# 不用富邦自己歷史中位數 — 若整批被夜盤污染，內部 median 已被拉高，detection 失效。
+
+_FINMIND_BASELINE_CACHE: dict[str, tuple[float, pd.DataFrame]] = {}
+_FINMIND_BASELINE_TTL = 300  # 5 分鐘 in-process cache，攤平富邦 fetch 都觸發 FinMind 的延遲
+
+
+def _get_finmind_baseline_cached(lookback_days: int) -> pd.DataFrame:
+    """回傳 FinMind 近 N 日 OHLC，5 分鐘 in-process cache。"""
+    now = time.time()
+    cached = _FINMIND_BASELINE_CACHE.get("baseline")
+    if cached and (now - cached[0]) < _FINMIND_BASELINE_TTL:
+        return cached[1]
+    df = _fetch_txf_finmind(lookback_days)
+    _FINMIND_BASELINE_CACHE["baseline"] = (now, df)
+    return df
+
+
+def _is_fubon_polluted(fubon_df: pd.DataFrame, lookback_days: int = 30, threshold: float = 0.005) -> tuple[bool, str]:
+    """
+    比對富邦最新 5 日 close/high/low vs FinMind baseline，任一日差 > 0.5% → 污染。
+    回 (polluted, reason)。FinMind 取不到時保守視為 not_polluted（不阻斷富邦）。
+    """
+    try:
+        finmind = _get_finmind_baseline_cached(lookback_days)
+    except Exception as e:
+        log.warning("sanity check 無法取得 FinMind baseline: %s", e)
+        return (False, "baseline_unavailable")
+
+    # 兩來源 inner join 最近 5 個交易日
+    common_idx = fubon_df.index.intersection(finmind.index)
+    if len(common_idx) < 3:
+        return (False, f"insufficient_overlap (got {len(common_idx)} common dates)")
+
+    recent = sorted(common_idx)[-5:]
+    for d in recent:
+        fb = fubon_df.loc[d]
+        fm = finmind.loc[d]
+        for col in ("close", "high", "low"):
+            fb_v, fm_v = float(fb[col]), float(fm[col])
+            if fm_v == 0:
+                continue
+            diff = abs(fb_v - fm_v) / fm_v
+            if diff > threshold:
+                return (True, f"{d.date()} {col}: fubon={fb_v:.2f} vs finmind={fm_v:.2f} (diff={diff:.2%})")
+    return (False, "ok")
+
+
+# ---------------------------------------------------------------------------
 # 台指期主入口
 # ---------------------------------------------------------------------------
 
 def fetch_txf(lookback_days: int = 200) -> pd.DataFrame:
     """
-    台指期 OHLC：富邦 API 優先，備援 FinMind 公開 API。
-    回傳 DataFrame，index=trade_date，columns=[open,high,low,close,volume]。
-    """
-    # 1. 富邦 API
-    if config.FUBON_ID:
-        try:
-            return _fetch_txf_fubon(lookback_days)
-        except Exception as e:
-            log.warning("富邦 API 失敗，切換 FinMind：%s", e)
+    台指期 OHLC，回傳 DataFrame，index=trade_date，columns=[open,high,low,close,volume]。
 
-    # 2. FinMind 公開 API（不需憑證）
+    策略（B5.1）：預設走 FinMind（純日盤、已知安全）。
+    富邦路徑僅在 FUBON_TXF_VERIFIED=True 時啟用（B5.1 步驟 4 完成後才設）；
+    走富邦時跑跨來源 sanity check，污染判定 → 自動 fallback FinMind。
+    FORCE_FINMIND_TXF=1 可強制 FinMind（緊急止血用）。
+    """
+    # 1. 強制 FinMind 旗標（最高優先）
+    if config.FORCE_FINMIND_TXF:
+        log.info("FORCE_FINMIND_TXF=1 → 跳過富邦，直接 FinMind")
+        return _fetch_txf_finmind(lookback_days)
+
+    # 2. 富邦路徑（僅在驗證通過時啟用）
+    if config.FUBON_TXF_VERIFIED and config.FUBON_ID:
+        try:
+            fubon_df = _fetch_txf_fubon(lookback_days)
+            polluted, reason = _is_fubon_polluted(fubon_df, lookback_days)
+            if polluted:
+                log.error("富邦資料污染偵測，fallback FinMind: %s", reason)
+                return _fetch_txf_finmind(lookback_days)
+            log.info("富邦 sanity check 通過: %s", reason)
+            return fubon_df
+        except Exception as e:
+            log.warning("富邦 API 失敗，fallback FinMind: %s", e)
+            return _fetch_txf_finmind(lookback_days)
+
+    # 3. 預設安全路徑：FinMind
     return _fetch_txf_finmind(lookback_days)
 
 

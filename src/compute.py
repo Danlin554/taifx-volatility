@@ -3,7 +3,45 @@ from __future__ import annotations
 import math
 from types import MappingProxyType
 
+import numpy as np
 import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# OHLC 完整性驗證（B5.2.b，live + DB 路徑共用）
+# ---------------------------------------------------------------------------
+
+def validate_txf_ohlc_frame(df: pd.DataFrame, *, tail: int = 20) -> list[str]:
+    """檢查 TXF DataFrame 最近 N 筆 OHLC 完整性。違反清單回傳 list[str]，空 list = 通過。
+
+    規則：
+      - open/high/low/close 必須 finite（非 NaN/inf）
+      - 四欄必須 > 0
+      - high >= max(open, close) 且 high >= low
+      - low <= min(open, close)
+    """
+    violations: list[str] = []
+    sub = df.tail(tail)
+    for col in ("open", "high", "low", "close"):
+        if col not in sub.columns:
+            violations.append(f"missing column: {col}")
+            return violations
+    for d, row in sub.iterrows():
+        o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
+        date_str = d.date().isoformat() if hasattr(d, "date") else str(d)
+        for name, v in (("open", o), ("high", h), ("low", l), ("close", c)):
+            if not np.isfinite(v):
+                violations.append(f"{date_str}: {name}={v} not finite")
+            elif v <= 0:
+                violations.append(f"{date_str}: {name}={v} <= 0")
+        if np.isfinite(o) and np.isfinite(h) and np.isfinite(l) and np.isfinite(c):
+            if h < max(o, c):
+                violations.append(f"{date_str}: high={h} < max(open={o}, close={c})")
+            if h < l:
+                violations.append(f"{date_str}: high={h} < low={l}")
+            if l > min(o, c):
+                violations.append(f"{date_str}: low={l} > min(open={o}, close={c})")
+    return violations
 
 
 # ---------------------------------------------------------------------------

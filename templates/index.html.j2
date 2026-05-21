@@ -100,6 +100,17 @@ input[type=date]#openDate:focus{border-color:rgba(255,255,255,.6)}
 .prev-row input{background:#fff;border:1px solid #e0e0e0;border-radius:var(--radius-sm);color:#1a1a2e;font-size:.95rem;font-weight:700;width:120px;text-align:center;padding:6px 8px;font-family:inherit;outline:none;font-variant-numeric:tabular-nums}
 .prev-row input:focus{border-color:var(--accent)}
 
+/* B5.3 OHLC row + meta badge */
+.meta-badge{display:inline-block;font-size:.62rem;font-weight:600;color:var(--text2);background:var(--border2);padding:2px 8px;border-radius:10px;letter-spacing:.3px;text-transform:none;margin-left:8px}
+.ohlc-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.ohlc-box{background:#f7f9fc;border:1px solid var(--border2);border-radius:var(--radius-sm);padding:6px 4px;text-align:center}
+.ohlc-box.highlight{background:#eff6ff;border-color:#bfdbfe}
+.ohlc-box .ol{font-size:.6rem;color:var(--text3);font-weight:600;margin-bottom:2px}
+.ohlc-box .ov{font-size:.95rem;font-weight:700;color:#1a1a2e;font-variant-numeric:tabular-nums}
+.ohlc-box.highlight .ov{color:#2563eb}
+.market-tbl .close-col{font-weight:600;font-size:.85rem;color:#1a1a2e;font-variant-numeric:tabular-nums;min-width:80px}
+.market-tbl .sym-zh{color:var(--text3);font-size:.68rem;font-weight:500;margin-left:4px}
+
 /* ── Results column ── */
 .results-col{display:flex;flex-direction:column;gap:8px}
 .rbox{border-radius:var(--radius-sm);padding:10px 12px;text-align:center;border:1px solid var(--border2)}
@@ -239,39 +250,56 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 
 <!-- ── 美股 + 預估 ── -->
 <div class="card">
-  <div class="card-title"><span class="ct-icon">📈</span>美股漲跌幅 → 台指開盤預估</div>
+  <div class="card-title">
+    <span class="ct-icon">📈</span>美股漲跌幅 → 台指開盤預估
+    <span class="meta-badge" id="us-meta">NYSE 收盤 {{ us_session_date or '—' }}</span>
+  </div>
   <div class="us-layout">
     <div>
       <table class="market-tbl">
         <thead>
-          <tr><th>指數</th><th>漲幅 (%)</th><th>權重 (%)</th></tr>
+          <tr><th>商品</th><th>收盤</th><th>漲幅 (%)</th><th>權重 (%)</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td class="name dj">DJ</td>
-            <td><input class="num-input" type="number" id="djC"  value="{{ us.dj }}"  step="0.01" aria-label="DJ漲幅"></td>
+            <td class="name dj">DJ<span class="sym-zh">道瓊工業</span></td>
+            <td class="close-col" id="djClose">{{ '{:,.2f}'.format(us_data.dj.close) if us_data and us_data.dj else '—' }}</td>
+            <td><input class="num-input" type="number" id="djC"  value="{{ '%.2f' | format(us_data.dj.pct if us_data and us_data.dj else us.dj) }}"  step="0.01" aria-label="DJ漲幅"></td>
             <td><input class="num-input weight-input" type="number" id="djW"  value="50" step="1" aria-label="DJ權重"></td>
           </tr>
           <tr>
-            <td class="name nq">NQ</td>
-            <td><input class="num-input" type="number" id="nqC"  value="{{ us.nq }}"  step="0.01" aria-label="NQ漲幅"></td>
+            <td class="name nq">NQ<span class="sym-zh">那斯達克綜合</span></td>
+            <td class="close-col" id="nqClose">{{ '{:,.2f}'.format(us_data.nq.close) if us_data and us_data.nq else '—' }}</td>
+            <td><input class="num-input" type="number" id="nqC"  value="{{ '%.2f' | format(us_data.nq.pct if us_data and us_data.nq else us.nq) }}"  step="0.01" aria-label="NQ漲幅"></td>
             <td><input class="num-input weight-input" type="number" id="nqW"  value="50" step="1" aria-label="NQ權重"></td>
           </tr>
           <tr>
-            <td class="name spy">SPY</td>
-            <td><input class="num-input" type="number" id="spyC" value="{{ us.spy }}" step="0.01" aria-label="SPY漲幅"></td>
+            <td class="name spy">SPY<span class="sym-zh">標普500</span></td>
+            <td class="close-col" id="spyClose">{{ '{:,.2f}'.format(us_data.spy.close) if us_data and us_data.spy else '—' }}</td>
+            <td><input class="num-input" type="number" id="spyC" value="{{ '%.2f' | format(us_data.spy.pct if us_data and us_data.spy else us.spy) }}" step="0.01" aria-label="SPY漲幅"></td>
             <td><input class="num-input weight-input" type="number" id="spyW" value="0"  step="1" aria-label="SPY權重"></td>
           </tr>
           <tr>
-            <td class="name tsm">TSM</td>
-            <td><input class="num-input" type="number" id="tsmC" value="{{ us.tsm }}" step="0.01" aria-label="TSM漲幅"></td>
+            <td class="name tsm">TSM<span class="sym-zh">台積電ADR</span></td>
+            <td class="close-col" id="tsmClose">{{ '{:,.2f}'.format(us_data.tsm.close) if us_data and us_data.tsm else '—' }}</td>
+            <td><input class="num-input" type="number" id="tsmC" value="{{ '%.2f' | format(us_data.tsm.pct if us_data and us_data.tsm else us.tsm) }}" step="0.01" aria-label="TSM漲幅"></td>
             <td><input class="num-input weight-input" type="number" id="tsmW" value="0"  step="1" aria-label="TSM權重"></td>
           </tr>
         </tbody>
       </table>
-      <div class="prev-row">
-        <label for="prevClose">前日台指收盤</label>
-        <input type="number" id="prevClose" value="{{ prev_close }}" step="1" aria-label="前日台指期收盤">
+      <div class="prev-row" style="flex-direction:column;align-items:stretch;gap:6px">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <label style="font-weight:700;color:var(--text)">前日台指期收盤</label>
+          <span class="meta-badge" id="txf-meta">{{ txf_symbol_label or '大臺近月（TXFR1）日盤' }} · {{ txf_ohlc.date if txf_ohlc else '—' }}</span>
+        </div>
+        <div class="ohlc-row">
+          <div class="ohlc-box"><div class="ol">開</div><div class="ov" id="txfOpen">{{ '{:,.0f}'.format(txf_ohlc.open) if txf_ohlc else '—' }}</div></div>
+          <div class="ohlc-box"><div class="ol">高</div><div class="ov" id="txfHigh">{{ '{:,.0f}'.format(txf_ohlc.high) if txf_ohlc else '—' }}</div></div>
+          <div class="ohlc-box"><div class="ol">低</div><div class="ov" id="txfLow">{{ '{:,.0f}'.format(txf_ohlc.low) if txf_ohlc else '—' }}</div></div>
+          <div class="ohlc-box highlight"><div class="ol">收</div><div class="ov" id="txfClose">{{ '{:,.0f}'.format(txf_ohlc.close) if txf_ohlc else '—' }}</div></div>
+        </div>
+        <!-- 保留 hidden input 維持 calculate() / prevClose 既有契約 -->
+        <input type="hidden" id="prevClose" value="{{ txf_ohlc.close if txf_ohlc else prev_close }}">
       </div>
     </div>
     <div class="results-col">
@@ -530,13 +558,53 @@ function calculate() {
 // patchDOM：切換日期後更新快照欄位（不動 weights/R）
 // ────────────────────────────────────────────────────────
 function patchDOM(data) {
-  if (data.us) {
-    setVal('djC',  data.us.dj);
-    setVal('nqC',  data.us.nq);
-    setVal('spyC', data.us.spy);
-    setVal('tsmC', data.us.tsm);
+  // 美股漲幅：優先用 us_data.<k>.pct（toFixed(2)），fallback us.<k>
+  const fmtPct = (v) => (v === null || v === undefined || isNaN(Number(v))) ? '' : (+v).toFixed(2);
+  if (data.us_data) {
+    setVal('djC',  fmtPct(data.us_data.dj?.pct));
+    setVal('nqC',  fmtPct(data.us_data.nq?.pct));
+    setVal('spyC', fmtPct(data.us_data.spy?.pct));
+    setVal('tsmC', fmtPct(data.us_data.tsm?.pct));
+    setText('djClose',  data.us_data.dj?.close?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
+    setText('nqClose',  data.us_data.nq?.close?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
+    setText('spyClose', data.us_data.spy?.close?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
+    setText('tsmClose', data.us_data.tsm?.close?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
+  } else if (data.us) {
+    setVal('djC',  fmtPct(data.us.dj));
+    setVal('nqC',  fmtPct(data.us.nq));
+    setVal('spyC', fmtPct(data.us.spy));
+    setVal('tsmC', fmtPct(data.us.tsm));
   }
-  setVal('prevClose', data.prev_close);
+
+  // 台指期 OHLC（B5.3 A/C）
+  if (data.txf_ohlc) {
+    setText('txfOpen',  Math.round(data.txf_ohlc.open).toLocaleString());
+    setText('txfHigh',  Math.round(data.txf_ohlc.high).toLocaleString());
+    setText('txfLow',   Math.round(data.txf_ohlc.low).toLocaleString());
+    setText('txfClose', Math.round(data.txf_ohlc.close).toLocaleString());
+    // hidden input 同步，維持 calculate() 既有契約
+    setVal('prevClose', data.txf_ohlc.close);
+    const label = data.txf_symbol_label || '大臺近月（TXFR1）日盤';
+    setText('txf-meta', label + ' · ' + (data.txf_ohlc.date || '—'));
+  } else if (data.prev_close !== undefined) {
+    setVal('prevClose', data.prev_close);
+  }
+
+  // NYSE 收盤 meta badge（用 us_session_close_tpe，DST/半日交易日由後端 calendar 推導）
+  const fmtTpe = (iso) => {
+    if (!iso) return '收盤後';
+    try {
+      const d = new Date(iso);
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${m}-${day} ${hh}:${mm}`;
+    } catch { return '收盤後'; }
+  };
+  if (data.us_session_date) {
+    setText('us-meta', `NYSE 收盤 ${data.us_session_date}（台北 ${fmtTpe(data.us_session_close_tpe)}）`);
+  }
 
   if (data.stats) {
     setVal('a20', data.stats.a20); setVal('a10', data.stats.a10); setVal('a5',  data.stats.a5);
@@ -579,6 +647,9 @@ function patchDOM(data) {
   }
 
   setText('gen-at', fmtDatetime(data.generated_at));
+
+  // B5.3 C：所有欄位更新後重算加權預估（hidden prevClose 已換值）
+  calculate();
 }
 
 // ────────────────────────────────────────────────────────

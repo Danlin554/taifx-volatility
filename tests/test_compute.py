@@ -25,6 +25,7 @@ from src.compute import (
     weekday_avg_multi,
     default_open_price,
     rolling_stats,
+    validate_txf_ohlc_frame,
 )
 
 
@@ -247,3 +248,87 @@ class TestRollingStatsInsufficient:
         stats = rolling_stats(hl)
         assert not math.isnan(stats["a5"])
         assert stats["a5"] == pytest.approx(150.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# validate_txf_ohlc_frame（B5.2.b）
+# ---------------------------------------------------------------------------
+
+def _ohlc_df(rows: list[dict]) -> pd.DataFrame:
+    """製造帶日期 index 的 OHLC DataFrame。"""
+    df = pd.DataFrame(rows)
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.set_index("trade_date")
+
+
+class TestValidateTxfOhlcFrame:
+    """OHLC 完整性驗證：finite、正數、h>=max(o,c)、l<=min(o,c)。"""
+
+    def test_valid_frame_passes(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-19", "open": 100, "high": 110, "low": 95, "close": 105},
+            {"trade_date": "2026-05-20", "open": 105, "high": 115, "low": 100, "close": 112},
+        ])
+        assert validate_txf_ohlc_frame(df) == []
+
+    def test_nan_open_caught(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": float("nan"), "high": 115, "low": 100, "close": 112},
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        assert any("open" in v and "not finite" in v for v in violations)
+
+    def test_zero_close_caught(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": 100, "high": 110, "low": 95, "close": 0},
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        assert any("close=0" in v and "<= 0" in v for v in violations)
+
+    def test_high_less_than_close_caught(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": 100, "high": 110, "low": 95, "close": 120},
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        assert any("high=110" in v and "close=120" in v for v in violations)
+
+    def test_low_greater_than_open_caught(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": 90, "high": 110, "low": 95, "close": 105},
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        # open=90, low=95 → low > min(o,c)
+        assert any("low=95" in v and "open=90" in v for v in violations)
+
+    def test_high_less_than_low_caught(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": 100, "high": 90, "low": 95, "close": 100},
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        # 也會違反 h<max(o,c)，但 h<l 也會抓到
+        assert any("high=90" in v for v in violations)
+
+    def test_inf_caught(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": 100, "high": float("inf"), "low": 95, "close": 105},
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        assert any("high" in v and "not finite" in v for v in violations)
+
+    def test_tail_only_checks_recent_n(self):
+        """validate_txf_ohlc_frame(df, tail=2) 只檢查最近 2 筆。"""
+        df = _ohlc_df([
+            {"trade_date": "2026-05-18", "open": 100, "high": 90, "low": 95, "close": 100},  # 違反
+            {"trade_date": "2026-05-19", "open": 100, "high": 110, "low": 95, "close": 105},  # 正常
+            {"trade_date": "2026-05-20", "open": 100, "high": 110, "low": 95, "close": 105},  # 正常
+        ])
+        assert validate_txf_ohlc_frame(df, tail=2) == []
+        # 但 tail=3 會抓到
+        assert validate_txf_ohlc_frame(df, tail=3) != []
+
+    def test_missing_column(self):
+        df = _ohlc_df([
+            {"trade_date": "2026-05-20", "open": 100, "high": 110, "low": 95},  # 缺 close
+        ])
+        violations = validate_txf_ohlc_frame(df)
+        assert any("missing column" in v and "close" in v for v in violations)
