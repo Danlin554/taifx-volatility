@@ -241,10 +241,11 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
   <div class="hdr-right">
     <span id="data-source-badge" class="src-badge {{ 'src-live' if data_source == 'live' else 'src-db' }}">{{ 'LIVE' if data_source == 'live' else 'DB' }}</span>
     <input type="date" id="openDate"
-           value="{{ effective_date or asof_iso }}"
+           value="{{ server_today or effective_date or asof_iso }}"
            min="{{ earliest_db_date or '' }}"
            max="{{ server_today or '' }}"
            aria-label="查詢日期">
+    <span class="meta-badge" id="effective-meta">資料配對日 {{ effective_date or '—' }}</span>
   </div>
 </div>
 
@@ -646,6 +647,11 @@ function patchDOM(data) {
     dsEl.className = 'src-badge ' + (isLive ? 'src-live' : 'src-db');
   }
 
+  const metaEl = document.getElementById('effective-meta');
+  if (metaEl && data.effective_date) {
+    metaEl.textContent = `資料配對日 ${data.effective_date}`;
+  }
+
   setText('gen-at', fmtDatetime(data.generated_at));
 
   // B5.3 C：所有欄位更新後重算加權預估（hidden prevClose 已換值）
@@ -723,7 +729,16 @@ async function bootstrapFresh() {
     const data = await res.json();
     const dateEl = document.getElementById('openDate');
     if (dateEl && data.server_today) {
+      const prevMax = dateEl.max;
       dateEl.max = data.server_today;
+      // 若 picker 仍是預渲染時的值（使用者尚未互動）且 fresh server_today 比較新 → bump
+      if (dateEl.value === prevMax && data.server_today > prevMax) {
+        dateEl.value = data.server_today;
+      }
+    }
+    const metaEl = document.getElementById('effective-meta');
+    if (metaEl && data.effective_date) {
+      metaEl.textContent = `資料配對日 ${data.effective_date}`;
     }
     const staleBanner = document.getElementById('stale-banner');
     if (staleBanner) {
