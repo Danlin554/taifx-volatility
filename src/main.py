@@ -438,11 +438,20 @@ def _compute_is_stale_now(snap: dict, observed_at: datetime.datetime) -> bool:
     """以「現在」為基準判斷 cache 是否過時。
 
     比 trading_date 與 server_today：trading_date < today → cron 沒推進 → True。
+    若 snap 沒有 trading_date（舊格式 cache），從 effective_date 動態計算。
     Calendar 不可用 → 保守回 False，不亂跳紅燈。
     """
-    td_iso = snap.get("trading_date") or snap.get("effective_date")
+    td_iso = snap.get("trading_date")
     if not td_iso:
-        return False
+        eff_iso = snap.get("effective_date")
+        if not eff_iso:
+            return False
+        try:
+            eff = datetime.date.fromisoformat(eff_iso)
+            td = freshness.next_xtai_session(eff) or eff
+            td_iso = td.isoformat()
+        except Exception:
+            return False
     try:
         td = datetime.date.fromisoformat(td_iso)
         today = observed_at.astimezone(config.TZ).date()

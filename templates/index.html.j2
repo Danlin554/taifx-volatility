@@ -222,12 +222,12 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 <div id="_toast"></div>
 <div class="wrap">
 
-<div class="banner banner-stale" id="stale-banner" {% if not is_stale %}hidden{% endif %}>
-  ⚠ 資料尚未更新到今天的配對日，目前顯示 {{ effective_date or asof_iso }} 的資料，請等待下次自動更新。
+<div class="banner banner-stale" id="stale-banner" hidden>
+  ⚠ 資料尚未更新，請等待下次自動更新。
 </div>
 
-<div class="banner banner-adj" id="adj-banner" {% if not asof_adjusted_from %}hidden{% endif %}>
-  ⚠ {{ asof_adjusted_from }} 非交易日，顯示最近交易日資料（{{ resolved_effective_date }}）
+<div class="banner banner-adj" id="adj-banner" hidden>
+  ⚠ <span id="adj-banner-text"></span>
 </div>
 
 <!-- ── Header ── -->
@@ -628,13 +628,22 @@ function patchDOM(data) {
   }
 
   const staleBanner = document.getElementById('stale-banner');
-  if (staleBanner) staleBanner.hidden = !data.is_stale;
+  if (staleBanner) {
+    staleBanner.hidden = !data.is_stale;
+    if (data.is_stale) {
+      const td = data.trading_date || data.effective_date || '';
+      staleBanner.textContent = td
+        ? `⚠ 資料尚未更新（適用交易日 ${td}），請等待下次自動更新。`
+        : '⚠ 資料尚未更新，請等待下次自動更新。';
+    }
+  }
 
   const adjBanner = document.getElementById('adj-banner');
+  const adjText = document.getElementById('adj-banner-text');
   if (adjBanner) {
     if (data.asof_adjusted_from) {
       adjBanner.hidden = false;
-      adjBanner.textContent = `⚠ ${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date}）`;
+      if (adjText) adjText.textContent = `${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date || ''}）`;
     } else {
       adjBanner.hidden = true;
     }
@@ -745,8 +754,11 @@ async function bootstrapFresh() {
     const staleBanner = document.getElementById('stale-banner');
     if (staleBanner) {
       staleBanner.hidden = !data.is_stale;
-      if (data.is_stale && freshTradingDate) {
-        staleBanner.textContent = `⚠ 資料尚未更新到今天，目前顯示 ${freshTradingDate} 的資料，請等待下次自動更新。`;
+      if (data.is_stale) {
+        const td = freshTradingDate || data.effective_date || '';
+        staleBanner.textContent = td
+          ? `⚠ 資料尚未更新（適用交易日 ${td}），請等待下次自動更新。`
+          : '⚠ 資料尚未更新，請等待下次自動更新。';
       }
     }
   } catch (e) {
