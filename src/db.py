@@ -168,6 +168,7 @@ def earliest_trade_date(symbol: str) -> datetime.date | None:
     return _query_symbol_earliest(symbol)
 
 
+
 def _query_symbol_earliest(symbol: str) -> datetime.date | None:
     sql = "SELECT MIN(trade_date) FROM tvol_indices_daily WHERE symbol = %s"
     try:

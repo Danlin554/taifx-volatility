@@ -269,6 +269,7 @@ def _earliest_db_date_safe() -> datetime.date | None:
     return db.earliest_trade_date(config.TXF_SYMBOL) if config.DATABASE_URL else None
 
 
+
 def _resolve_earliest_for_live(data: dict[str, pd.DataFrame]) -> datetime.date | None:
     """Live 路徑專用：DB 為空時用本次 fetch 首筆日期，避免 fresh deploy 的空窗口。"""
     earliest = _earliest_db_date_safe()
@@ -536,7 +537,11 @@ def build_snapshot_from_data(
         "resolved_effective_date": effective.isoformat(),
         "asof_adjusted_from": (
             requested_asof.isoformat()
-            if requested_asof is not None and requested_asof != effective
+            if (
+                requested_asof is not None
+                and requested_asof != effective
+                and freshness.is_trading_day(requested_asof) is False
+            )
             else None
         ),
         "server_today": server_today.isoformat(),
@@ -729,7 +734,11 @@ async def startup():
 @app.get("/")
 async def root():
     if _HTML_PATH.exists():
-        return FileResponse(str(_HTML_PATH), media_type="text/html")
+        return FileResponse(
+            str(_HTML_PATH),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, must-revalidate", "Pragma": "no-cache"},
+        )
     raise HTTPException(503, "HTML not yet generated, try POST /refresh first")
 
 
@@ -738,7 +747,7 @@ async def api_snapshot(asof: str | None = None):
     if asof is None:
         if not _SNAPSHOT:
             raise HTTPException(503, "snapshot not ready")
-        return JSONResponse(_SNAPSHOT)
+        return JSONResponse(_SNAPSHOT, headers={"Cache-Control": "no-store"})
 
     if asof.lower() == "today":
         raise HTTPException(400, "asof=today not supported; omit param to get live cache")
@@ -771,7 +780,7 @@ async def api_snapshot(asof: str | None = None):
                 "actual_us_session_dates": getattr(e, "actual_us_session_dates", None),
             },
         )
-    return JSONResponse(snapshot)  # 永遠不更新 _SNAPSHOT
+    return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})  # 永遠不更新 _SNAPSHOT
 
 
 @app.get("/healthz")

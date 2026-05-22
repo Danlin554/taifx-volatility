@@ -246,14 +246,14 @@ class TestBuildSnapshotFromData:
         assert snap["is_stale"] is False
 
     def test_asof_adjusted_from_set_when_different(self):
-        """asof != resolved effective_date → asof_adjusted_from 有值。"""
+        """非交易日 asof（週六 5/17）→ asof_adjusted_from 有值。"""
         data = _make_data(txf_last="2026-05-15", us_last="2026-05-14")
         observed_at = self._observed_at("2026-05-19T06:00:00")
 
         snap = build_snapshot_from_data(
             data,
             source="db",
-            asof=datetime.date(2026, 5, 17),  # 週六，但 resolved=週五
+            asof=datetime.date(2026, 5, 17),  # 週六，is_trading_day=False → flag
             observed_at=observed_at,
             us_session_validation="validated",
             txf_asof_validation="strict",
@@ -377,6 +377,62 @@ class TestBuildSnapshotFromData:
             us_calendar_validation_mode="strict",
         )
         assert snap["earliest_db_date"] is None
+
+    def test_asof_adjusted_from_none_when_trading_day_and_different_effective(self):
+        """交易日 asof（例如「今天」）即使 resolved_effective < asof，adj_from 也應為 None。
+        場景：用戶 pick 今天（交易日），系統回前一日配對日，這是正常狀態。"""
+        data = _make_data(txf_last="2026-05-20", us_last="2026-05-19")
+        observed_at = self._observed_at("2026-05-21T08:00:00")
+        with patch("src.freshness.is_trading_day", return_value=True):
+            snap = build_snapshot_from_data(
+                data,
+                source="db",
+                asof=datetime.date(2026, 5, 21),  # 今天（交易日），effective=5/20
+                observed_at=observed_at,
+                us_session_validation="validated",
+                txf_asof_validation="strict",
+            )
+        assert snap["asof_adjusted_from"] is None
+        assert snap["resolved_effective_date"] == "2026-05-20"
+
+    def test_asof_adjusted_from_set_when_weekend(self):
+        """週末 asof → adj_from 有值（非交易日調整）。"""
+        data = _make_data(txf_last="2026-05-15", us_last="2026-05-14")
+        observed_at = self._observed_at("2026-05-19T06:00:00")
+        # 5/17 = 週六，is_trading_day → False（不用 mock，週末直接 False）
+        snap = build_snapshot_from_data(
+            data,
+            source="db",
+            asof=datetime.date(2026, 5, 17),
+            observed_at=observed_at,
+            us_session_validation="validated",
+            txf_asof_validation="strict",
+        )
+        assert snap["asof_adjusted_from"] == "2026-05-17"
+        assert snap["resolved_effective_date"] == "2026-05-15"
+
+
+# ---------------------------------------------------------------------------
+# Cache-Control headers
+# ---------------------------------------------------------------------------
+
+class TestCacheControlHeaders:
+    def test_api_snapshot_no_asof_has_no_store(self):
+        import src.main as main_mod
+        original = main_mod._SNAPSHOT
+        main_mod._SNAPSHOT = _FIXTURE_SNAPSHOT
+        try:
+            resp = client.get("/api/snapshot")
+            assert resp.status_code == 200
+            assert "no-store" in resp.headers.get("cache-control", "")
+        finally:
+            main_mod._SNAPSHOT = original
+
+    def test_api_snapshot_with_asof_has_no_store(self):
+        with patch("src.main.build_snapshot", return_value=_FIXTURE_SNAPSHOT):
+            resp = client.get("/api/snapshot?asof=2026-05-18")
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("cache-control", "")
 
 
 # ---------------------------------------------------------------------------
