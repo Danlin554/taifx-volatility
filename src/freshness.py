@@ -119,6 +119,17 @@ def last_completed_us_session(observed_at: datetime.datetime) -> datetime.date |
         return None
 
 
+def previous_xtai_session(d: datetime.date) -> datetime.date | None:
+    """回傳 d 之前最近的 XTAI session 日期（不含 d 本身）。
+    Calendar 不可用 → None（caller fail-closed 不亂判 stale）。
+    """
+    try:
+        xtai = _get_calendar("XTAI")
+        return xtai.previous_session(pd.Timestamp(d)).date()
+    except Exception:
+        return None
+
+
 def previous_nyse_session(d: datetime.date) -> datetime.date | None:
     """回傳 d 之前最近的 NYSE session 日期。不可用 → None。"""
     try:

@@ -223,7 +223,7 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 <div class="wrap">
 
 <div class="banner banner-stale" id="stale-banner" {% if not is_stale %}hidden{% endif %}>
-  ⚠ 資料延遲：最新可用資料為 {{ asof_iso }}，請等待下次自動更新。
+  ⚠ 資料尚未更新到今天的配對日，目前顯示 {{ effective_date or asof_iso }} 的資料，請等待下次自動更新。
 </div>
 
 <div class="banner banner-adj" id="adj-banner" {% if not asof_adjusted_from %}hidden{% endif %}>
@@ -713,6 +713,30 @@ document.getElementById('openDate').addEventListener('change', function() {
 
 loadPersistentState();
 calculate();
+
+// Bootstrap: 用 fresh /api/snapshot 蓋掉預渲染 HTML 的凍結值
+// （server_today / is_stale 必須以「現在」為準，而非 cron 跑時的快照值）
+async function bootstrapFresh() {
+  try {
+    const res = await fetch('/api/snapshot', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const dateEl = document.getElementById('openDate');
+    if (dateEl && data.server_today) {
+      dateEl.max = data.server_today;
+    }
+    const staleBanner = document.getElementById('stale-banner');
+    if (staleBanner) {
+      staleBanner.hidden = !data.is_stale;
+      if (data.is_stale && data.effective_date) {
+        staleBanner.textContent = `⚠ 資料尚未更新到今天的配對日，目前顯示 ${data.effective_date} 的資料，請等待下次自動更新。`;
+      }
+    }
+  } catch (e) {
+    // 靜默：bootstrap 失敗就用凍結值，不影響主要功能
+  }
+}
+bootstrapFresh();
 </script>
 </body>
 </html>

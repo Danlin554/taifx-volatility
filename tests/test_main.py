@@ -436,6 +436,93 @@ class TestCacheControlHeaders:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/snapshot（無 asof）— fresh overlay（server_today + is_stale）
+# ---------------------------------------------------------------------------
+
+class TestApiSnapshotFreshOverlay:
+    """驗證 GET /api/snapshot（無 asof）每次 request 都以 fresh observed_at 重算
+    server_today 與 is_stale，不直接回傳凍結的 _SNAPSHOT 值。"""
+
+    def _set_snapshot(self, snap: dict):
+        import src.main as main_mod
+        original = main_mod._SNAPSHOT
+        main_mod._SNAPSHOT = snap
+        return original
+
+    def _restore(self, original):
+        import src.main as main_mod
+        main_mod._SNAPSHOT = original
+
+    def test_server_today_is_fresh_not_frozen(self):
+        """handler 應回傳 fresh server_today（今天），而非 _SNAPSHOT 內的凍結值。"""
+        snap = {**_FIXTURE_SNAPSHOT, "server_today": "2026-05-20"}
+        original = self._set_snapshot(snap)
+        try:
+            fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
+            with patch("src.main.datetime") as mock_dt, \
+                 patch("src.main.freshness") as mock_freshness:
+                mock_dt.datetime.now.return_value = fixed_now
+                mock_dt.date = datetime.date
+                mock_freshness.previous_xtai_session.return_value = datetime.date(2026, 5, 21)
+                resp = client.get("/api/snapshot")
+            assert resp.status_code == 200
+            assert resp.json()["server_today"] == "2026-05-22"
+        finally:
+            self._restore(original)
+
+    def test_is_stale_true_when_effective_lags_expected(self):
+        """effective_date = 5/20，今天 5/22 → expected = 5/21 → is_stale = True。"""
+        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-20", "is_stale": False}
+        original = self._set_snapshot(snap)
+        try:
+            fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
+            with patch("src.main.datetime") as mock_dt, \
+                 patch("src.main.freshness") as mock_freshness:
+                mock_dt.datetime.now.return_value = fixed_now
+                mock_dt.date = datetime.date
+                mock_freshness.previous_xtai_session.return_value = datetime.date(2026, 5, 21)
+                resp = client.get("/api/snapshot")
+            assert resp.status_code == 200
+            assert resp.json()["is_stale"] is True
+        finally:
+            self._restore(original)
+
+    def test_is_stale_false_when_effective_matches_expected(self):
+        """effective_date = 5/21，今天 5/22 → expected = 5/21 → is_stale = False。"""
+        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-21", "is_stale": False}
+        original = self._set_snapshot(snap)
+        try:
+            fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
+            with patch("src.main.datetime") as mock_dt, \
+                 patch("src.main.freshness") as mock_freshness:
+                mock_dt.datetime.now.return_value = fixed_now
+                mock_dt.date = datetime.date
+                mock_freshness.previous_xtai_session.return_value = datetime.date(2026, 5, 21)
+                resp = client.get("/api/snapshot")
+            assert resp.status_code == 200
+            assert resp.json()["is_stale"] is False
+        finally:
+            self._restore(original)
+
+    def test_is_stale_false_when_calendar_unavailable(self):
+        """previous_xtai_session → None（calendar 故障）→ 保守不亂跳紅燈 → is_stale = False。"""
+        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-15", "is_stale": False}
+        original = self._set_snapshot(snap)
+        try:
+            fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
+            with patch("src.main.datetime") as mock_dt, \
+                 patch("src.main.freshness") as mock_freshness:
+                mock_dt.datetime.now.return_value = fixed_now
+                mock_dt.date = datetime.date
+                mock_freshness.previous_xtai_session.return_value = None
+                resp = client.get("/api/snapshot")
+            assert resp.status_code == 200
+            assert resp.json()["is_stale"] is False
+        finally:
+            self._restore(original)
+
+
+# ---------------------------------------------------------------------------
 # _validate_live_raw
 # ---------------------------------------------------------------------------
 

@@ -431,6 +431,31 @@ def read_db_data(
 
 
 # ---------------------------------------------------------------------------
+# Layer 2 helper
+# ---------------------------------------------------------------------------
+
+def _compute_is_stale_now(snap: dict, observed_at: datetime.datetime) -> bool:
+    """以「現在」為基準判斷 cache 中的 effective_date 是否過時。
+
+    T 日 expected effective = T-1 XTAI session。
+    若 cache effective_date < expected → cron 故障 / 美股尚未入庫 → True。
+    Calendar 不可用 → 保守回 False，不亂跳紅燈。
+    """
+    eff_iso = snap.get("effective_date")
+    if not eff_iso:
+        return False
+    try:
+        eff = datetime.date.fromisoformat(eff_iso)
+        today = observed_at.astimezone(config.TZ).date()
+        expected = freshness.previous_xtai_session(today)
+        if expected is None:
+            return False
+        return eff < expected
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: Pure computation（無 IO、無 wall-clock 讀取）
 # ---------------------------------------------------------------------------
 
@@ -554,7 +579,7 @@ def build_snapshot_from_data(
         "us_data": us_data,
         "us_session_close_tpe": us_session_close_tpe,
         "data_source": source,
-        "is_stale": False,  # live 通過驗證即非 stale；db 用 historical 模式不判 stale
+        "is_stale": False,  # 初始值；GET /api/snapshot 與前端 bootstrap 會用 fresh observed_at 重算
         "freshness_mode": freshness_mode,
         "generated_at": observed_at.isoformat(),
         # Calendar validation 結構化欄位（R4 #3 / #4 / R6 #4 / R7 #2）
@@ -747,7 +772,11 @@ async def api_snapshot(asof: str | None = None):
     if asof is None:
         if not _SNAPSHOT:
             raise HTTPException(503, "snapshot not ready")
-        return JSONResponse(_SNAPSHOT, headers={"Cache-Control": "no-store"})
+        snap = dict(_SNAPSHOT)
+        observed_at_now = datetime.datetime.now(config.TZ)
+        snap["server_today"] = observed_at_now.date().isoformat()
+        snap["is_stale"] = _compute_is_stale_now(snap, observed_at_now)
+        return JSONResponse(snap, headers={"Cache-Control": "no-store"})
 
     if asof.lower() == "today":
         raise HTTPException(400, "asof=today not supported; omit param to get live cache")
