@@ -130,6 +130,15 @@ def previous_xtai_session(d: datetime.date) -> datetime.date | None:
         return None
 
 
+def next_xtai_session(d: datetime.date) -> datetime.date | None:
+    """回傳 d 之後最近的 XTAI session 日期（不含 d 本身）。Calendar 不可用 → None。"""
+    try:
+        xtai = _get_calendar("XTAI")
+        return xtai.next_session(pd.Timestamp(d)).date()
+    except Exception:
+        return None
+
+
 def previous_nyse_session(d: datetime.date) -> datetime.date | None:
     """回傳 d 之前最近的 NYSE session 日期。不可用 → None。"""
     try:

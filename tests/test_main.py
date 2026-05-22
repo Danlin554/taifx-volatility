@@ -57,6 +57,7 @@ def _make_data(txf_last="2026-05-19", us_last="2026-05-18") -> dict[str, pd.Data
 
 _FIXTURE_SNAPSHOT = {
     "effective_date": "2026-05-18",
+    "trading_date": "2026-05-19",
     "resolved_effective_date": "2026-05-18",
     "asof_iso": "2026-05-18",
     "us": {"dj": 1.0, "nq": 1.0, "spy": 1.0, "tsm": 1.0},
@@ -205,6 +206,23 @@ class TestApiSnapshotAsofValidation:
             resp = client.get("/api/snapshot?asof=2026-04-30")
         body = resp.json()["detail"]
         assert body["earliest"] is None
+
+    def test_asof_trading_date_translates_to_internal_close(self):
+        """asof=2026-05-22（trading date T）→ build_snapshot 以 T-1=5/21 呼叫；response.trading_date=5/22。"""
+        dummy_snap = {**_FIXTURE_SNAPSHOT, "trading_date": "2026-05-22", "data_source": "db"}
+        with patch("src.main.build_snapshot", return_value=dummy_snap) as mock_bs, \
+             patch("src.main.freshness") as mock_freshness:
+            mock_freshness.previous_xtai_session.return_value = datetime.date(2026, 5, 21)
+            resp = client.get("/api/snapshot?asof=2026-05-22")
+        assert resp.status_code == 200
+        # build_snapshot 必須以 internal_close(5/21) 而非 trading_date(5/22) 呼叫
+        called_asof = mock_bs.call_args.kwargs.get("asof") or mock_bs.call_args.args[1] if len(mock_bs.call_args.args) > 1 else None
+        # 也可以從 kwargs 取
+        if called_asof is None:
+            called_asof = mock_bs.call_args[1].get("asof")
+        assert called_asof == datetime.date(2026, 5, 21), f"expected internal_close=5/21, got {called_asof}"
+        # response 中 trading_date 必須是用戶要求的 T=5/22
+        assert resp.json()["trading_date"] == "2026-05-22"
 
 
 # ---------------------------------------------------------------------------
@@ -471,16 +489,14 @@ class TestApiSnapshotFreshOverlay:
             self._restore(original)
 
     def test_is_stale_true_when_effective_lags_expected(self):
-        """effective_date = 5/20，今天 5/22 → expected = 5/21 → is_stale = True。"""
-        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-20", "is_stale": False}
+        """trading_date = 5/21，今天 5/22 → 5/21 < 5/22 → is_stale = True。"""
+        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-20", "trading_date": "2026-05-21", "is_stale": False}
         original = self._set_snapshot(snap)
         try:
             fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
-            with patch("src.main.datetime") as mock_dt, \
-                 patch("src.main.freshness") as mock_freshness:
+            with patch("src.main.datetime") as mock_dt:
                 mock_dt.datetime.now.return_value = fixed_now
                 mock_dt.date = datetime.date
-                mock_freshness.previous_xtai_session.return_value = datetime.date(2026, 5, 21)
                 resp = client.get("/api/snapshot")
             assert resp.status_code == 200
             assert resp.json()["is_stale"] is True
@@ -488,33 +504,29 @@ class TestApiSnapshotFreshOverlay:
             self._restore(original)
 
     def test_is_stale_false_when_effective_matches_expected(self):
-        """effective_date = 5/21，今天 5/22 → expected = 5/21 → is_stale = False。"""
-        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-21", "is_stale": False}
+        """trading_date = 5/22，今天 5/22 → 5/22 == 5/22 → is_stale = False。"""
+        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-21", "trading_date": "2026-05-22", "is_stale": False}
         original = self._set_snapshot(snap)
         try:
             fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
-            with patch("src.main.datetime") as mock_dt, \
-                 patch("src.main.freshness") as mock_freshness:
+            with patch("src.main.datetime") as mock_dt:
                 mock_dt.datetime.now.return_value = fixed_now
                 mock_dt.date = datetime.date
-                mock_freshness.previous_xtai_session.return_value = datetime.date(2026, 5, 21)
                 resp = client.get("/api/snapshot")
             assert resp.status_code == 200
             assert resp.json()["is_stale"] is False
         finally:
             self._restore(original)
 
-    def test_is_stale_false_when_calendar_unavailable(self):
-        """previous_xtai_session → None（calendar 故障）→ 保守不亂跳紅燈 → is_stale = False。"""
-        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-15", "is_stale": False}
+    def test_is_stale_false_when_trading_date_equals_today(self):
+        """trading_date == today → is_stale = False（calendar 狀態無關）。"""
+        snap = {**_FIXTURE_SNAPSHOT, "effective_date": "2026-05-21", "trading_date": "2026-05-22", "is_stale": False}
         original = self._set_snapshot(snap)
         try:
             fixed_now = TZ.localize(datetime.datetime.fromisoformat("2026-05-22T08:00:00"))
-            with patch("src.main.datetime") as mock_dt, \
-                 patch("src.main.freshness") as mock_freshness:
+            with patch("src.main.datetime") as mock_dt:
                 mock_dt.datetime.now.return_value = fixed_now
                 mock_dt.date = datetime.date
-                mock_freshness.previous_xtai_session.return_value = None
                 resp = client.get("/api/snapshot")
             assert resp.status_code == 200
             assert resp.json()["is_stale"] is False

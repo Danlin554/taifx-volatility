@@ -241,11 +241,11 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
   <div class="hdr-right">
     <span id="data-source-badge" class="src-badge {{ 'src-live' if data_source == 'live' else 'src-db' }}">{{ 'LIVE' if data_source == 'live' else 'DB' }}</span>
     <input type="date" id="openDate"
-           value="{{ server_today or effective_date or asof_iso }}"
+           value="{{ trading_date or server_today or effective_date or asof_iso }}"
            min="{{ earliest_db_date or '' }}"
            max="{{ server_today or '' }}"
            aria-label="查詢日期">
-    <span class="meta-badge" id="effective-meta">資料配對日 {{ effective_date or '—' }}</span>
+    <span class="meta-badge" id="effective-meta">適用交易日 {{ trading_date or effective_date or '—' }}</span>
   </div>
 </div>
 
@@ -648,8 +648,9 @@ function patchDOM(data) {
   }
 
   const metaEl = document.getElementById('effective-meta');
-  if (metaEl && data.effective_date) {
-    metaEl.textContent = `資料配對日 ${data.effective_date}`;
+  if (metaEl) {
+    const displayDate = data.trading_date || data.effective_date;
+    if (displayDate) metaEl.textContent = `適用交易日 ${displayDate}`;
   }
 
   setText('gen-at', fmtDatetime(data.generated_at));
@@ -727,24 +728,25 @@ async function bootstrapFresh() {
     const res = await fetch('/api/snapshot', { cache: 'no-store' });
     if (!res.ok) return;
     const data = await res.json();
+    const freshTradingDate = data.trading_date || data.server_today;
     const dateEl = document.getElementById('openDate');
     if (dateEl && data.server_today) {
       const prevMax = dateEl.max;
       dateEl.max = data.server_today;
-      // 若 picker 仍是預渲染時的值（使用者尚未互動）且 fresh server_today 比較新 → bump
-      if (dateEl.value === prevMax && data.server_today > prevMax) {
-        dateEl.value = data.server_today;
+      // 若 picker 仍是預渲染時的值（使用者尚未互動）且 fresh trading_date 比較新 → bump
+      if (dateEl.value === prevMax && freshTradingDate && freshTradingDate > prevMax) {
+        dateEl.value = freshTradingDate;
       }
     }
     const metaEl = document.getElementById('effective-meta');
-    if (metaEl && data.effective_date) {
-      metaEl.textContent = `資料配對日 ${data.effective_date}`;
+    if (metaEl && freshTradingDate) {
+      metaEl.textContent = `適用交易日 ${freshTradingDate}`;
     }
     const staleBanner = document.getElementById('stale-banner');
     if (staleBanner) {
       staleBanner.hidden = !data.is_stale;
-      if (data.is_stale && data.effective_date) {
-        staleBanner.textContent = `⚠ 資料尚未更新到今天的配對日，目前顯示 ${data.effective_date} 的資料，請等待下次自動更新。`;
+      if (data.is_stale && freshTradingDate) {
+        staleBanner.textContent = `⚠ 資料尚未更新到今天，目前顯示 ${freshTradingDate} 的資料，請等待下次自動更新。`;
       }
     }
   } catch (e) {

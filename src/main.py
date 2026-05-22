@@ -435,22 +435,18 @@ def read_db_data(
 # ---------------------------------------------------------------------------
 
 def _compute_is_stale_now(snap: dict, observed_at: datetime.datetime) -> bool:
-    """以「現在」為基準判斷 cache 中的 effective_date 是否過時。
+    """以「現在」為基準判斷 cache 是否過時。
 
-    T 日 expected effective = T-1 XTAI session。
-    若 cache effective_date < expected → cron 故障 / 美股尚未入庫 → True。
+    比 trading_date 與 server_today：trading_date < today → cron 沒推進 → True。
     Calendar 不可用 → 保守回 False，不亂跳紅燈。
     """
-    eff_iso = snap.get("effective_date")
-    if not eff_iso:
+    td_iso = snap.get("trading_date") or snap.get("effective_date")
+    if not td_iso:
         return False
     try:
-        eff = datetime.date.fromisoformat(eff_iso)
+        td = datetime.date.fromisoformat(td_iso)
         today = observed_at.astimezone(config.TZ).date()
-        expected = freshness.previous_xtai_session(today)
-        if expected is None:
-            return False
-        return eff < expected
+        return td < today
     except Exception:
         return False
 
@@ -478,6 +474,7 @@ def build_snapshot_from_data(
 
     txf = data["txf"]
     effective = txf.index[-1].date()
+    trading_date = freshness.next_xtai_session(effective) or effective
     requested_asof = asof if source == "db" else None
 
     # freshness_mode 從 caller 傳入的 calendar validation 狀態推導（R8 #4）
@@ -559,6 +556,7 @@ def build_snapshot_from_data(
         "default_open_price": default_open,
         "forecast_base_close": int(prev_close),
         "effective_date": effective.isoformat(),
+        "trading_date": trading_date.isoformat(),
         "resolved_effective_date": effective.isoformat(),
         "asof_adjusted_from": (
             requested_asof.isoformat()
@@ -793,8 +791,12 @@ async def api_snapshot(asof: str | None = None):
     if d > server_today:
         raise HTTPException(422, "future date not allowed (server today in Asia/Taipei)")
 
+    # d 是 trading date T；內部讀 DB 用 TW close date = T-1（previous XTAI session）。
+    # calendar 不可用時退回原值（d 本身），行為等同舊版。
+    internal_close = freshness.previous_xtai_session(d) or d
+
     try:
-        snapshot = build_snapshot(source="db", asof=d, observed_at=observed_at)
+        snapshot = build_snapshot(source="db", asof=internal_close, observed_at=observed_at)
     except InsufficientDataError as e:
         raw_asof = getattr(e, "asof", None)
         raise HTTPException(
@@ -809,6 +811,8 @@ async def api_snapshot(asof: str | None = None):
                 "actual_us_session_dates": getattr(e, "actual_us_session_dates", None),
             },
         )
+    # 以用戶要求的 trading date 覆寫 snapshot 的 trading_date（DB 路徑算出的可能是 d+1）
+    snapshot["trading_date"] = d.isoformat()
     return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})  # 永遠不更新 _SNAPSHOT
 
 
