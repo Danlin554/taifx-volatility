@@ -223,11 +223,11 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 <div class="wrap">
 
 <div class="banner banner-stale" id="stale-banner" hidden>
-  ⚠ 資料尚未更新，請等待下次自動更新。
+  📅 資料尚未更新，請等待下次自動更新。
 </div>
 
 <div class="banner banner-adj" id="adj-banner" hidden>
-  ⚠ <span id="adj-banner-text"></span>
+  📅 <span id="adj-banner-text"></span>
 </div>
 
 <!-- ── Header ── -->
@@ -245,6 +245,7 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
            min="{{ earliest_db_date or '' }}"
            max="{{ server_today or '' }}"
            aria-label="查詢日期">
+    <span class="meta-badge" id="data-basis-badge">資料基準日 {{ effective_date or asof_iso or '—' }}</span>
     <span class="meta-badge" id="effective-meta">適用交易日 {{ trading_date or effective_date or '—' }}</span>
   </div>
 </div>
@@ -646,8 +647,8 @@ function patchDOM(data) {
     if (data.is_stale) {
       const td = data.trading_date || data.effective_date || '';
       staleBanner.textContent = td
-        ? `⚠ 資料尚未更新（適用交易日 ${td}），請等待下次自動更新。`
-        : '⚠ 資料尚未更新，請等待下次自動更新。';
+        ? `📅 資料尚未更新（適用交易日 ${td}），請等待下次自動更新。`
+        : '📅 資料尚未更新，請等待下次自動更新。';
     }
   }
 
@@ -680,6 +681,11 @@ function patchDOM(data) {
     const isLive = data.data_source === 'live';
     dsEl.textContent = isLive ? 'LIVE' : 'DB';
     dsEl.className = 'src-badge ' + (isLive ? 'src-live' : 'src-db');
+  }
+
+  const basisEl = document.getElementById('data-basis-badge');
+  if (basisEl && data.effective_date) {
+    basisEl.textContent = `資料基準日 ${data.effective_date}`;
   }
 
   const metaEl = document.getElementById('effective-meta');
@@ -773,6 +779,11 @@ async function bootstrapFresh() {
         dateEl.value = freshTradingDate;
       }
     }
+    const basisElFresh = document.getElementById('data-basis-badge');
+    if (basisElFresh && data.effective_date) {
+      basisElFresh.textContent = `資料基準日 ${data.effective_date}`;
+    }
+
     const metaEl = document.getElementById('effective-meta');
     if (metaEl && freshTradingDate) {
       metaEl.textContent = `適用交易日 ${freshTradingDate}`;
