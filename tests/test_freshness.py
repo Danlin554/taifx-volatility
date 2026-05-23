@@ -360,3 +360,88 @@ class TestDeprecatedWrappers:
         with pytest.warns(DeprecationWarning):
             with patch.object(freshness, "_get_calendar", side_effect=Exception("no cal")):
                 freshness.is_stale(txf, datetime.date(2026, 5, 16))
+
+
+# ---------------------------------------------------------------------------
+# us_sessions_between（台美交易日 gap 內的 NYSE session 列表）
+# ---------------------------------------------------------------------------
+
+class TestUsSessionsBetween:
+    def _make_xnys(self, sessions_with_utc_closes: list[tuple[str, str]]):
+        """製造 mock XNYS。sessions_with_utc_closes = [(session_date_str, utc_close_str), ...]"""
+        mock_xnys = MagicMock()
+        ts_sessions = pd.DatetimeIndex([pd.Timestamp(s) for s, _ in sessions_with_utc_closes])
+        mock_xnys.sessions_in_range.return_value = ts_sessions
+        close_map = {
+            pd.Timestamp(s): pd.Timestamp(c, tz="UTC")
+            for s, c in sessions_with_utc_closes
+        }
+        mock_xnys.session_close.side_effect = lambda s: close_map[s]
+        return mock_xnys
+
+    def test_normal_day_returns_one_session(self):
+        """正常交易日：TW 5/21 → 5/22，美股 5/21（收 5/22 04:00 TPE = 5/21 20:00 UTC EDT）in window。"""
+        mock_xnys = self._make_xnys([
+            ("2026-05-21", "2026-05-21T20:00:00"),  # closes 2026-05-22 04:00 TPE ✓
+        ])
+        with patch.object(freshness, "_get_calendar", return_value=mock_xnys):
+            result = freshness.us_sessions_between(
+                datetime.date(2026, 5, 21), datetime.date(2026, 5, 22)
+            )
+        assert result == [datetime.date(2026, 5, 21)]
+
+    def test_thanksgiving_gap_returns_empty(self):
+        """感恩節：TW 11/26 → 11/27，美股 11/26 休市，gap 內無 NYSE session → []。"""
+        mock_xnys = self._make_xnys([])  # sessions_in_range 回空
+        with patch.object(freshness, "_get_calendar", return_value=mock_xnys):
+            result = freshness.us_sessions_between(
+                datetime.date(2026, 11, 26), datetime.date(2026, 11, 27)
+            )
+        assert result == []
+
+    def test_lunar_new_year_returns_multiple_sessions(self):
+        """春節：TW 2/11 → 2/23，期間美股 7 個 session（2/23 NYSE 尚未收盤排除）。"""
+        # NYSE 冬令（EST）收盤 16:00 = 21:00 UTC = 台北次日 05:00 TPE
+        sessions_closes = [
+            ("2026-02-11", "2026-02-11T21:00:00"),  # closes 2/12 05:00 TPE ✓
+            ("2026-02-12", "2026-02-12T21:00:00"),  # closes 2/13 05:00 TPE ✓
+            ("2026-02-13", "2026-02-13T21:00:00"),  # closes 2/14 05:00 TPE ✓
+            ("2026-02-17", "2026-02-17T21:00:00"),  # closes 2/18 05:00 TPE ✓
+            ("2026-02-18", "2026-02-18T21:00:00"),  # closes 2/19 05:00 TPE ✓
+            ("2026-02-19", "2026-02-19T21:00:00"),  # closes 2/20 05:00 TPE ✓
+            ("2026-02-20", "2026-02-20T21:00:00"),  # closes 2/21 05:00 TPE ✓
+            ("2026-02-23", "2026-02-23T21:00:00"),  # closes 2/24 05:00 TPE，AFTER TW open 08:45 ✗
+        ]
+        mock_xnys = self._make_xnys(sessions_closes)
+        with patch.object(freshness, "_get_calendar", return_value=mock_xnys):
+            result = freshness.us_sessions_between(
+                datetime.date(2026, 2, 11), datetime.date(2026, 2, 23)
+            )
+        expected = [
+            datetime.date(2026, 2, 11), datetime.date(2026, 2, 12),
+            datetime.date(2026, 2, 13), datetime.date(2026, 2, 17),
+            datetime.date(2026, 2, 18), datetime.date(2026, 2, 19),
+            datetime.date(2026, 2, 20),
+        ]
+        assert result == expected
+
+    def test_calendar_unavailable_returns_none(self):
+        """calendar 不可用 → None（caller fail-closed）。"""
+        with patch.object(freshness, "_get_calendar", side_effect=Exception("no cal")):
+            result = freshness.us_sessions_between(
+                datetime.date(2026, 5, 21), datetime.date(2026, 5, 22)
+            )
+        assert result is None
+
+    def test_session_close_before_tw_close_excluded(self):
+        """session close 在 TW 收盤前 → 不納入（已被市場 price in）。"""
+        # TW close: 5/21 13:45 TPE. NYSE 5/21 close at 5/21 12:00 TPE = BEFORE TW close
+        # 12:00 TPE = 04:00 UTC
+        mock_xnys = self._make_xnys([
+            ("2026-05-21", "2026-05-21T04:00:00"),  # 5/21 12:00 TPE，在 TW 收盤前 ✗
+        ])
+        with patch.object(freshness, "_get_calendar", return_value=mock_xnys):
+            result = freshness.us_sessions_between(
+                datetime.date(2026, 5, 21), datetime.date(2026, 5, 22)
+            )
+        assert result == []

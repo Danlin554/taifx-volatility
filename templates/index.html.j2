@@ -305,7 +305,7 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
     </div>
     <div class="results-col">
       <div class="rbox rbox-accent">
-        <div class="rl">加權美股漲幅</div>
+        <div class="rl">加權美股漲幅 <span id="cum-chip" class="meta-badge" hidden style="font-size:.6rem;vertical-align:middle">區間累積</span></div>
         <div class="rv" id="wChg" aria-live="polite">—</div>
       </div>
       <div class="rbox rbox-green">
@@ -447,6 +447,7 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 // ────────────────────────────────────────────────────────
 window._TARGETS = {{ targets | tojson }};
 window._CURRENT_ASOF = '{{ effective_date or asof_iso }}';
+window._calendarAnomaly = '{{ calendar_anomaly or "none" }}';
 
 // ────────────────────────────────────────────────────────
 // 輔助函式
@@ -511,6 +512,18 @@ function save() {
 // ────────────────────────────────────────────────────────
 function calculate() {
   save();
+
+  // Case 1：美股假日無開盤 → 所有預估卡片顯示「—」，不做計算
+  if (window._calendarAnomaly === 'us_no_session') {
+    const wEl = document.getElementById('wChg');
+    if (wEl) { wEl.textContent = '—'; wEl.style.color = ''; }
+    ['futEst','rLow','rHigh','open-price-display'].forEach(id => setText(id, '—'));
+    ['b1','b2','b3','b4','b5'].forEach(k => {
+      setText('long-'  + k, '—');
+      setText('short-' + k, '—');
+    });
+    return;
+  }
 
   const djC=n('djC'), djW=n('djW');
   const nqC=n('nqC'), nqW=n('nqW');
@@ -641,13 +654,26 @@ function patchDOM(data) {
   const adjBanner = document.getElementById('adj-banner');
   const adjText = document.getElementById('adj-banner-text');
   if (adjBanner) {
-    if (data.asof_adjusted_from) {
+    const anomaly = data.calendar_anomaly;
+    const win = data.us_aggregation_window;
+    if (anomaly === 'us_no_session') {
+      adjBanner.hidden = false;
+      if (adjText) adjText.textContent = `美股 ${data.us_session_date || data.effective_date || '—'} 無開盤，今日預估開盤暫不適用`;
+    } else if (anomaly === 'tw_holiday_gap' && win) {
+      adjBanner.hidden = false;
+      if (adjText) adjText.textContent = `台股連休期間美股共有 ${win.session_count} 個交易日，漲跌幅以 ${win.start} ～ ${win.end} 區間累積計算`;
+    } else if (data.asof_adjusted_from) {
       adjBanner.hidden = false;
       if (adjText) adjText.textContent = `${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date || ''}）`;
     } else {
       adjBanner.hidden = true;
     }
   }
+
+  // 同步 calendar anomaly 狀態（影響 calculate() 的顯示模式）
+  window._calendarAnomaly = data.calendar_anomaly || 'none';
+  const cumChip = document.getElementById('cum-chip');
+  if (cumChip) cumChip.hidden = (data.calendar_anomaly !== 'tw_holiday_gap');
 
   const dsEl = document.getElementById('data-source-badge');
   if (dsEl) {
@@ -761,6 +787,28 @@ async function bootstrapFresh() {
           : '⚠ 資料尚未更新，請等待下次自動更新。';
       }
     }
+
+    const adjBannerFresh = document.getElementById('adj-banner');
+    const adjTextFresh = document.getElementById('adj-banner-text');
+    if (adjBannerFresh) {
+      const anomaly = data.calendar_anomaly;
+      const win = data.us_aggregation_window;
+      if (anomaly === 'us_no_session') {
+        adjBannerFresh.hidden = false;
+        if (adjTextFresh) adjTextFresh.textContent = `美股 ${data.us_session_date || data.effective_date || '—'} 無開盤，今日預估開盤暫不適用`;
+      } else if (anomaly === 'tw_holiday_gap' && win) {
+        adjBannerFresh.hidden = false;
+        if (adjTextFresh) adjTextFresh.textContent = `台股連休期間美股共有 ${win.session_count} 個交易日，漲跌幅以 ${win.start} ～ ${win.end} 區間累積計算`;
+      } else if (data.asof_adjusted_from) {
+        adjBannerFresh.hidden = false;
+        if (adjTextFresh) adjTextFresh.textContent = `${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date || ''}）`;
+      } else {
+        adjBannerFresh.hidden = true;
+      }
+    }
+    window._calendarAnomaly = data.calendar_anomaly || 'none';
+    const cumChipFresh = document.getElementById('cum-chip');
+    if (cumChipFresh) cumChipFresh.hidden = (data.calendar_anomaly !== 'tw_holiday_gap');
   } catch (e) {
     // 靜默：bootstrap 失敗就用凍結值，不影響主要功能
   }

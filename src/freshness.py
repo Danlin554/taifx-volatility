@@ -149,6 +149,44 @@ def previous_nyse_session(d: datetime.date) -> datetime.date | None:
         return None
 
 
+def us_sessions_between(
+    tw_prev_close_date: datetime.date,
+    tw_target_open_date: datetime.date,
+) -> list[datetime.date] | None:
+    """
+    回傳 [台股前次收盤 13:45 TPE, 台股下次開盤 08:45 TPE] 之間已完成的 NYSE session 日期 list。
+
+    - len == 0  → Case 1（台股開、美股假日）
+    - len == 1  → 正常
+    - len >= 2  → Case 2/3（台股連休）
+
+    Calendar 不可用 → None（caller fail-closed，退回正常路徑）。
+    """
+    from src import config
+
+    try:
+        xnys = _get_calendar("XNYS")
+        tw_close_aware = config.TZ.localize(
+            datetime.datetime.combine(tw_prev_close_date, datetime.time(13, 45))
+        )
+        tw_open_aware = config.TZ.localize(
+            datetime.datetime.combine(tw_target_open_date, datetime.time(8, 45))
+        )
+        start_ts = pd.Timestamp(tw_prev_close_date)
+        end_ts = pd.Timestamp(tw_target_open_date)
+        sessions = xnys.sessions_in_range(start_ts, end_ts)
+
+        result = []
+        for session in sessions:
+            close_ts = xnys.session_close(session)  # UTC-aware pd.Timestamp
+            close_aware = close_ts.astimezone(config.TZ).to_pydatetime()
+            if tw_close_aware < close_aware < tw_open_aware:
+                result.append(session.date())
+        return result
+    except Exception:
+        return None
+
+
 def compute_us_session_close_tpe(session_date: datetime.date) -> datetime.datetime | None:
     """回傳 NYSE 該 session 的收盤對應台北時間（DST + 半日交易日自動處理）。
 

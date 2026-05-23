@@ -91,6 +91,8 @@ _FIXTURE_SNAPSHOT = {
     "txf_asof_validation": None,
     "asof_adjusted_from": None,
     "generated_at": "2026-05-19T06:00:00+08:00",
+    "calendar_anomaly": "none",
+    "us_aggregation_window": None,
 }
 
 
@@ -1157,3 +1159,125 @@ class TestRefreshAndPublishFallback:
             last = published_data[k].index[-1].date()
             assert last <= datetime.date(2026, 5, 19), \
                 f"US[{k}] 最後一筆 {last} 應 <= new_effective 2026-05-19"
+
+
+# ---------------------------------------------------------------------------
+# calendar anomaly（台美交易日不對稱）
+# ---------------------------------------------------------------------------
+
+class TestCalendarAnomalyDetection:
+    """測試 build_snapshot_from_data 的三情境 calendar_anomaly 分流邏輯。"""
+
+    def _observed_at(self, s: str = "2026-05-22T06:00:00") -> datetime.datetime:
+        return TZ.localize(datetime.datetime.fromisoformat(s))
+
+    def _call(self, gap_sessions, txf_last="2026-05-21", us_last="2026-05-20"):
+        data = _make_data(txf_last=txf_last, us_last=us_last)
+        observed_at = self._observed_at()
+        with patch("src.freshness.us_sessions_between", return_value=gap_sessions), \
+             patch("src.freshness.next_xtai_session", return_value=datetime.date(2026, 5, 22)):
+            snap = build_snapshot_from_data(
+                data, source="live", observed_at=observed_at,
+                txf_calendar_validation_mode="strict",
+                us_calendar_validation_mode="strict",
+            )
+        return snap
+
+    def test_normal_one_session_no_anomaly(self):
+        """gap=1 → calendar_anomaly='none'，us_pcts 正常填入。"""
+        snap = self._call(gap_sessions=[datetime.date(2026, 5, 21)])
+        assert snap["calendar_anomaly"] == "none"
+        assert snap["us_aggregation_window"] is None
+        for k in ("dj", "nq", "spy", "tsm"):
+            assert snap["us"][k] is not None
+
+    def test_case1_no_session_sets_us_no_session(self):
+        """gap=0 → calendar_anomaly='us_no_session'，us_pcts 全 None，default_open None。"""
+        snap = self._call(gap_sessions=[])
+        assert snap["calendar_anomaly"] == "us_no_session"
+        assert snap["us_aggregation_window"] is None
+        for k in ("dj", "nq", "spy", "tsm"):
+            assert snap["us"][k] is None
+        assert snap["default_open_price"] is None
+
+    def test_case2_multiple_sessions_sets_tw_holiday_gap(self):
+        """gap≥2 → calendar_anomaly='tw_holiday_gap'，us_aggregation_window 有值。"""
+        gap = [
+            datetime.date(2026, 2, 11), datetime.date(2026, 2, 12),
+            datetime.date(2026, 2, 13), datetime.date(2026, 2, 17),
+        ]
+        # 建立含足夠歷史的 US DataFrame
+        dates = pd.DatetimeIndex([
+            pd.Timestamp("2026-02-10"),  # baseline（gap_start 前一筆）
+            pd.Timestamp("2026-02-11"),  # gap_sessions[0]
+            pd.Timestamp("2026-02-12"),
+            pd.Timestamp("2026-02-13"),
+            pd.Timestamp("2026-02-17"),  # gap_sessions[-1]
+        ])
+        us_df = pd.DataFrame(
+            {"open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 1000},
+            index=dates,
+        )
+        data = {
+            "txf": _make_txf(last_date="2026-02-11"),
+            "dj": us_df, "nq": us_df, "spy": us_df, "tsm": us_df,
+        }
+        observed_at = TZ.localize(datetime.datetime.fromisoformat("2026-02-23T06:00:00"))
+        with patch("src.freshness.us_sessions_between", return_value=gap), \
+             patch("src.freshness.next_xtai_session", return_value=datetime.date(2026, 2, 23)):
+            snap = build_snapshot_from_data(
+                data, source="live", observed_at=observed_at,
+                txf_calendar_validation_mode="strict",
+                us_calendar_validation_mode="strict",
+            )
+        assert snap["calendar_anomaly"] == "tw_holiday_gap"
+        assert snap["us_aggregation_window"]["start"] == "2026-02-11"
+        assert snap["us_aggregation_window"]["end"] == "2026-02-17"
+        assert snap["us_aggregation_window"]["session_count"] == 4
+        # default_open_price 應有值（非 None）
+        assert snap["default_open_price"] is not None
+
+    def test_calendar_unavailable_degrades_to_normal(self):
+        """us_sessions_between 回 None（calendar 不可用） → 退回 latest_pct 正常路徑。"""
+        snap = self._call(gap_sessions=None)
+        assert snap["calendar_anomaly"] == "none"
+        assert snap["us_aggregation_window"] is None
+        for k in ("dj", "nq", "spy", "tsm"):
+            assert snap["us"][k] is not None
+
+
+# ---------------------------------------------------------------------------
+# cumulative_pct（幾何累積漲跌幅）
+# ---------------------------------------------------------------------------
+
+class TestCumulativePct:
+    from src import fetch as _fetch
+
+    def _df(self, closes: list[float], start_date: str = "2026-02-10") -> pd.DataFrame:
+        n = len(closes)
+        dates = pd.bdate_range(start=start_date, periods=n)
+        return pd.DataFrame(
+            {"open": 100.0, "high": 110.0, "low": 95.0, "close": closes, "volume": 1000},
+            index=dates,
+        )
+
+    def test_geometric_compounding(self):
+        """gap_start=2/11, gap_end=2/13 → baseline=2/10 close, cumulative = (end/base-1)*100。"""
+        from src.fetch import cumulative_pct
+        df = self._df([100.0, 110.0, 121.0, 110.0], "2026-02-10")
+        # baseline = 2/10 close = 100, gap_start = 2/11 (pos 1), gap_end = 2/12 (pos 2)
+        result = cumulative_pct(df, datetime.date(2026, 2, 11), datetime.date(2026, 2, 12))
+        assert abs(result - 21.0) < 0.01  # (121/100 - 1) * 100 = 21%
+
+    def test_returns_zero_when_start_not_in_df(self):
+        from src.fetch import cumulative_pct
+        df = self._df([100.0, 110.0])
+        result = cumulative_pct(df, datetime.date(2026, 1, 1), datetime.date(2026, 1, 2))
+        assert result == 0.0
+
+    def test_returns_zero_when_start_is_first_row(self):
+        """gap_start 在 df 第一筆 → 無前一筆 baseline → 0.0。"""
+        from src.fetch import cumulative_pct
+        df = self._df([100.0, 110.0], "2026-02-10")
+        result = cumulative_pct(df, datetime.date(2026, 2, 10), datetime.date(2026, 2, 11))
+        assert result == 0.0

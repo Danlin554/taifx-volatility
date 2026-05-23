@@ -209,7 +209,9 @@ def _required_nan_fields(snapshot: dict) -> list[tuple[str, str, object]]:
         ("root", "sig2", snapshot["sig2"]),
         ("root", "sig3", snapshot["sig3"]),
         ("root", "r", snapshot["r"]),
-        ("root", "default_open_price", snapshot["default_open_price"]),
+        # Case 1（美股假日無開盤）時 default_open_price 合理為 None，跳過必填驗證
+        *([("root", "default_open_price", snapshot["default_open_price"])]
+          if snapshot.get("calendar_anomaly") != "us_no_session" else []),
     ]
     for k in ("b1", "b2", "b3", "b4", "b5"):
         required.append(("targets", k, snapshot["targets"].get(k)))
@@ -506,9 +508,37 @@ def build_snapshot_from_data(
     wd = compute.weekday_avg(hl, config.WEEKDAY_MONTHS)
     targets = compute.daytrade_targets(hl)
     r_val = compute.calc_r(stats["a10"])
-    us_pcts = {k: fetch.latest_pct(data[k]) for k in config.US_SYMBOLS}
+    # Calendar anomaly detection：分類 TW 收盤→開盤 gap 內的美股 session 覆蓋狀況
+    gap_sessions = freshness.us_sessions_between(effective, trading_date)
+    if gap_sessions is None or len(gap_sessions) == 1:
+        # 正常或 calendar 不可用（degrade 到既有邏輯）
+        calendar_anomaly = "none"
+        us_aggregation_window = None
+        us_pcts = {k: fetch.latest_pct(data[k]) for k in config.US_SYMBOLS}
+    elif len(gap_sessions) == 0:
+        # Case 1：台股開、美股假日，gap 內無 NYSE session
+        calendar_anomaly = "us_no_session"
+        us_aggregation_window = None
+        us_pcts = {k: None for k in config.US_SYMBOLS}
+    else:
+        # Case 2/3：台股連休，美股有多個 session，用幾何累積漲跌幅
+        calendar_anomaly = "tw_holiday_gap"
+        us_aggregation_window = {
+            "start": gap_sessions[0].isoformat(),
+            "end": gap_sessions[-1].isoformat(),
+            "session_count": len(gap_sessions),
+            "us_session_dates": [d.isoformat() for d in gap_sessions],
+        }
+        us_pcts = {
+            k: fetch.cumulative_pct(data[k], gap_sessions[0], gap_sessions[-1])
+            for k in config.US_SYMBOLS
+        }
+
     prev_close = float(txf["close"].iloc[-1])
-    default_open = compute.default_open_price(prev_close, us_pcts)
+    default_open = (
+        None if calendar_anomaly == "us_no_session"
+        else compute.default_open_price(prev_close, us_pcts)
+    )
 
     us_session_dates = {k: data[k].index[-1].date().isoformat() for k in config.US_SYMBOLS}
     unique_us_dates = set(us_session_dates.values())
@@ -594,6 +624,9 @@ def build_snapshot_from_data(
         "us_calendar_validation": us_calendar_validation_mode if source == "live" else None,
         "us_session_validation": us_session_validation if source == "db" else None,
         "txf_asof_validation": txf_asof_validation if source == "db" else None,
+        # Calendar anomaly（台美交易日不對稱揭露）
+        "calendar_anomaly": calendar_anomaly,
+        "us_aggregation_window": us_aggregation_window,
     }
 
     if source == "live":

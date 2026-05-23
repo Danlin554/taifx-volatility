@@ -62,6 +62,44 @@ def latest_pct(df: pd.DataFrame) -> float:
     return round((last_close - prev_close) / prev_close * 100, 4)
 
 
+def cumulative_pct(df: pd.DataFrame, gap_start: "datetime.date", gap_end: "datetime.date") -> float:
+    """計算台股連休期間美股累積漲跌幅 (%)。
+
+    gap_start：gap 內第一個 NYSE session 日期（台股連休第一天）
+    gap_end：  gap 內最後一個 NYSE session 日期
+
+    基準收盤 = gap_start 在 df 中前一筆的 close（即台股連休前市場已知的最後美股收盤）。
+    終點收盤 = gap_end 的 close。
+    回傳幾何累積漲跌 = (終點 / 基準 - 1) × 100，保留 4 位小數。
+    Calendar 異常或資料不足 → 0.0 (fail-open，caller 仍有 calendar_anomaly 標籤揭露)。
+    """
+    try:
+        start_ts = pd.Timestamp(gap_start)
+        end_ts = pd.Timestamp(gap_end)
+
+        # 找 gap_start 在 df 中的位置
+        matching = (df.index == start_ts).nonzero()[0]
+        if len(matching) == 0:
+            return 0.0
+        start_pos = int(matching[0])
+        if start_pos == 0:
+            return 0.0  # 無前一筆作為基準
+
+        baseline_close = float(df["close"].iloc[start_pos - 1])
+
+        # 找 gap_end 的收盤
+        matching_end = (df.index == end_ts).nonzero()[0]
+        if len(matching_end) == 0:
+            return 0.0
+        end_close = float(df["close"].iloc[int(matching_end[0])])
+
+        if baseline_close == 0:
+            return 0.0
+        return round((end_close - baseline_close) / baseline_close * 100, 4)
+    except Exception:
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
 # 台指期（TXFR1）—— 富邦 API（主）
 # ---------------------------------------------------------------------------
