@@ -863,6 +863,96 @@ async def healthz():
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# 盤中即時資料
+# ---------------------------------------------------------------------------
+
+def _fetch_intraday_fubon() -> list[dict] | None:
+    """
+    Fetch today's 1-min OHLC bars for TXF via Fubon SDK REST.
+    Returns list of {time, open, high, low, close} dicts for Lightweight Charts,
+    or None if unavailable (no creds, non-trading hours, SDK error).
+    """
+    if not all([config.FUBON_ID, config.FUBON_PWD, config.FUBON_CERT_PATH, config.FUBON_CERT_PWD]):
+        return None
+    try:
+        from fubon_neo.sdk import FubonSDK  # type: ignore
+        sdk = FubonSDK()
+        sdk.login(
+            id=config.FUBON_ID,
+            pwd=config.FUBON_PWD,
+            cert_path=config.FUBON_CERT_PATH,
+            cert_pwd=config.FUBON_CERT_PWD,
+        )
+
+        today = datetime.date.today().isoformat()
+        result = None
+
+        # Try different Fubon SDK intraday patterns (API shape varies by SDK version)
+        for attempt in [
+            lambda: sdk.marketdata.rest_client.future.intraday.candles(
+                id=config.TXF_SYMBOL, date=today
+            ),
+            lambda: sdk.marketdata.rest_client.future.intraday.candles(
+                id=config.TXF_SYMBOL
+            ),
+            lambda: sdk.marketdata.rest_client.future.intraday.ohlcv(
+                id=config.TXF_SYMBOL, date=today
+            ),
+        ]:
+            try:
+                result = attempt()
+                break
+            except (AttributeError, TypeError):
+                continue
+
+        if result is None:
+            log.info("fubon intraday: no matching SDK method")
+            return None
+
+        rows = result.data if hasattr(result, "data") else result
+        if not rows:
+            return []
+
+        bars: list[dict] = []
+        for row in rows:
+            ts = row.get("datetime") or row.get("date") or row.get("time")
+            if ts is None:
+                continue
+            if isinstance(ts, str):
+                try:
+                    ts = int(pd.Timestamp(ts).timestamp())
+                except Exception:
+                    continue
+            else:
+                ts = int(ts)
+            bars.append({
+                "time": ts,
+                "open": float(row.get("open", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "close": float(row.get("close", 0)),
+            })
+        return sorted(bars, key=lambda x: x["time"])
+    except Exception as e:
+        log.warning("fubon intraday failed: %s", e)
+        return None
+
+
+@app.get("/api/intraday")
+async def api_intraday():
+    """Returns today's 1-min OHLC bars for TXF (Fubon SDK)."""
+    bars = await asyncio.to_thread(_fetch_intraday_fubon)
+    return JSONResponse(
+        {
+            "bars": bars if bars is not None else [],
+            "available": bars is not None,
+            "updated_at": datetime.datetime.now(config.TZ).isoformat(),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post("/refresh")
 async def refresh_endpoint(token: str, dry: bool = False):
     if token != config.REFRESH_TOKEN:

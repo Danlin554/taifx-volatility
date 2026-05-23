@@ -216,6 +216,23 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
   .bb-row,.dir-row{grid-template-columns:repeat(3,1fr)}
   .sigma-row{grid-template-columns:1fr 1fr}
 }
+
+/* ── Chart panel（右側固定浮動，≥1280px 才顯示）── */
+.chart-panel{
+  display:none;
+  position:fixed;right:14px;top:14px;
+  width:310px;max-height:calc(100vh - 28px);
+  overflow-y:auto;z-index:50;
+}
+@media(min-width:1280px){.chart-panel{display:block}}
+#txf-intraday-chart{height:430px;border-radius:var(--radius-sm);overflow:hidden}
+.chart-legend{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.chart-leg-item{display:inline-flex;align-items:center;gap:3px;font-size:.6rem;font-weight:600;
+  padding:1px 6px;border-radius:10px}
+.chart-leg-item.long{background:var(--up-bg);color:var(--up)}
+.chart-leg-item.short{background:var(--dn-bg);color:var(--dn)}
+.chart-nodata{display:flex;align-items:center;justify-content:center;height:430px;
+  color:var(--text3);font-size:.78rem;text-align:center;flex-direction:column;gap:6px}
 </style>
 </head>
 <body>
@@ -440,8 +457,28 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 <div class="footer">
   自動更新 · <span id="gen-at">{{ generated_at }}</span> · 台指 FinMind (TX) · 美股 yfinance
 </div>
+</div><!-- end .wrap -->
+
+<!-- ── 右側盤中走勢圖（≥1280px）── -->
+<div class="chart-panel" id="chart-panel">
+  <div class="card" style="padding:12px 10px">
+    <div class="card-title" style="margin-bottom:10px">
+      <span class="ct-icon">📊</span>台指期 · 盤中走勢
+      <span class="meta-badge" id="chart-meta">載入中…</span>
+    </div>
+    <div id="txf-intraday-chart">
+      <div class="chart-nodata" id="chart-nodata">
+        <span>⏳</span><span>盤中才有資料</span>
+      </div>
+    </div>
+    <div class="chart-legend" id="chart-legend">
+      <span class="chart-leg-item long">多方目標</span>
+      <span class="chart-leg-item short">空方目標</span>
+    </div>
+  </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 // ────────────────────────────────────────────────────────
 // 伺服器初始資料（Jinja2 注入）
@@ -449,6 +486,9 @@ body.loading .wrap{opacity:.4;transition:opacity .2s}
 window._TARGETS = {{ targets | tojson }};
 window._CURRENT_ASOF = '{{ effective_date or asof_iso }}';
 window._calendarAnomaly = '{{ calendar_anomaly or "none" }}';
+window._TXF_OHLC = {{ txf_ohlc | tojson if txf_ohlc else 'null' }};
+window._DEFAULT_OPEN_PRICE = {{ default_open_price | tojson if default_open_price else 'null' }};
+window._EFFECTIVE_DATE = '{{ effective_date or asof_iso or "" }}';
 
 // ────────────────────────────────────────────────────────
 // 輔助函式
@@ -663,9 +703,6 @@ function patchDOM(data) {
     } else if (anomaly === 'tw_holiday_gap' && win) {
       adjBanner.hidden = false;
       if (adjText) adjText.textContent = `台股連休期間美股共有 ${win.session_count} 個交易日，漲跌幅以 ${win.start} ～ ${win.end} 區間累積計算`;
-    } else if (data.asof_adjusted_from) {
-      adjBanner.hidden = false;
-      if (adjText) adjText.textContent = `${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date || ''}）`;
     } else {
       adjBanner.hidden = true;
     }
@@ -794,8 +831,8 @@ async function bootstrapFresh() {
       if (data.is_stale) {
         const td = freshTradingDate || data.effective_date || '';
         staleBanner.textContent = td
-          ? `⚠ 資料尚未更新（適用交易日 ${td}），請等待下次自動更新。`
-          : '⚠ 資料尚未更新，請等待下次自動更新。';
+          ? `📅 資料尚未更新（適用交易日 ${td}），請等待下次自動更新。`
+          : '📅 資料尚未更新，請等待下次自動更新。';
       }
     }
 
@@ -810,9 +847,6 @@ async function bootstrapFresh() {
       } else if (anomaly === 'tw_holiday_gap' && win) {
         adjBannerFresh.hidden = false;
         if (adjTextFresh) adjTextFresh.textContent = `台股連休期間美股共有 ${win.session_count} 個交易日，漲跌幅以 ${win.start} ～ ${win.end} 區間累積計算`;
-      } else if (data.asof_adjusted_from) {
-        adjBannerFresh.hidden = false;
-        if (adjTextFresh) adjTextFresh.textContent = `${data.asof_adjusted_from} 非交易日，顯示最近交易日資料（${data.resolved_effective_date || ''}）`;
       } else {
         adjBannerFresh.hidden = true;
       }
@@ -825,6 +859,144 @@ async function bootstrapFresh() {
   }
 }
 bootstrapFresh();
+
+// ────────────────────────────────────────────────────────
+// 盤中走勢圖（Lightweight Charts）
+// ────────────────────────────────────────────────────────
+(function() {
+  const container = document.getElementById('txf-intraday-chart');
+  if (!container || !window.LightweightCharts) return;
+
+  // Remove placeholder
+  const nodata = document.getElementById('chart-nodata');
+
+  let txfChart = null;
+  let candleSeries = null;
+  let priceLines = [];
+
+  function initChart() {
+    if (nodata) nodata.remove();
+    txfChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth || 290,
+      height: 430,
+      layout: { background: { color: '#ffffff' }, textColor: '#1a1a2e' },
+      grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+      rightPriceScale: { borderColor: '#e0e0e0' },
+      timeScale: { borderColor: '#e0e0e0', timeVisible: true, secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    });
+    candleSeries = txfChart.addCandlestickSeries({
+      upColor: '#16a34a', downColor: '#dc2626',
+      borderUpColor: '#16a34a', borderDownColor: '#dc2626',
+      wickUpColor: '#16a34a', wickDownColor: '#dc2626',
+    });
+    new ResizeObserver(() => {
+      if (txfChart) txfChart.applyOptions({ width: container.clientWidth });
+    }).observe(container);
+  }
+
+  function openPrice() {
+    // Use the live calculated estimate if available, else default_open_price, else prev_close
+    const futEl = document.getElementById('futEst');
+    if (futEl) {
+      const v = parseFloat(futEl.textContent.replace(/,/g, ''));
+      if (v && v > 1000) return v;
+    }
+    if (window._DEFAULT_OPEN_PRICE && window._DEFAULT_OPEN_PRICE > 1000) return window._DEFAULT_OPEN_PRICE;
+    const pcEl = document.getElementById('prevClose');
+    if (pcEl) {
+      const v = parseFloat(pcEl.value);
+      if (v && v > 1000) return v;
+    }
+    return 0;
+  }
+
+  function drawTargetLines() {
+    if (!candleSeries) return;
+    priceLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
+    priceLines = [];
+
+    const targets = window._TARGETS || {};
+    const open = openPrice();
+    if (!open) return;
+
+    const labels = ['一壘', '二壘', '三壘', '全壘打', '場外'];
+    const keys = ['b1', 'b2', 'b3', 'b4', 'b5'];
+    keys.forEach((k, i) => {
+      const t = targets[k];
+      if (!t) return;
+      const longP = Math.round(open + t);
+      const shortP = Math.round(open - t);
+      priceLines.push(candleSeries.createPriceLine({
+        price: longP, color: '#16a34a', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: `多${labels[i]}`,
+      }));
+      priceLines.push(candleSeries.createPriceLine({
+        price: shortP, color: '#dc2626', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: `空${labels[i]}`,
+      }));
+    });
+  }
+
+  function loadData() {
+    fetch('/api/intraday')
+      .then(r => r.json())
+      .then(data => {
+        if (!txfChart) initChart();
+        const bars = data.bars || [];
+        if (bars.length > 0) {
+          candleSeries.setData(bars);
+        } else {
+          // Fallback: show yesterday's daily bar as reference
+          if (window._TXF_OHLC && window._EFFECTIVE_DATE) {
+            try {
+              const ts = Math.floor(
+                new Date(window._EFFECTIVE_DATE + 'T05:45:00Z').getTime() / 1000
+              );
+              candleSeries.setData([{
+                time: ts,
+                open: window._TXF_OHLC.open,
+                high: window._TXF_OHLC.high,
+                low: window._TXF_OHLC.low,
+                close: window._TXF_OHLC.close,
+              }]);
+            } catch(e) {}
+          }
+        }
+        drawTargetLines();
+        const metaEl = document.getElementById('chart-meta');
+        if (metaEl) {
+          if (bars.length > 0) {
+            const t = new Date(data.updated_at);
+            metaEl.textContent = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')} 更新`;
+          } else {
+            metaEl.textContent = bars.length === 0 ? '盤後 / 無資料' : '—';
+          }
+        }
+      })
+      .catch(() => {
+        if (!txfChart) initChart();
+        drawTargetLines();
+        const metaEl = document.getElementById('chart-meta');
+        if (metaEl) metaEl.textContent = '載入失敗';
+      });
+  }
+
+  // Initial load + polling every 60s
+  loadData();
+  setInterval(loadData, 60000);
+
+  // Redraw target lines when calculate() updates futEst
+  const origCalc = window.calculate;
+  if (typeof origCalc === 'function') {
+    window.calculate = function() {
+      origCalc.apply(this, arguments);
+      setTimeout(drawTargetLines, 50);
+    };
+  }
+})();
 </script>
 </body>
 </html>
