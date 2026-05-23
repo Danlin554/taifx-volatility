@@ -1281,3 +1281,140 @@ class TestCumulativePct:
         df = self._df([100.0, 110.0], "2026-02-10")
         result = cumulative_pct(df, datetime.date(2026, 2, 10), datetime.date(2026, 2, 11))
         assert result == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 端對端情境測試（使用真實 calendar，不 mock calendar helpers）
+# ---------------------------------------------------------------------------
+
+class TestEndToEndCalendarScenarios:
+    """完整情境驗證：使用真實 exchange_calendars，確認三情境從 data → snapshot 全鏈正確。"""
+
+    def _make_us_extended(self, last_date: str) -> pd.DataFrame:
+        """建立含 40+ 個業務日的 US DataFrame，確保 baseline 與 gap_end 都在範圍內。"""
+        end = pd.Timestamp(last_date)
+        start = end - pd.Timedelta(days=60)
+        dates = pd.bdate_range(start=start, end=end)
+        n = len(dates)
+        closes = [10000.0 + i * 5.0 for i in range(n)]
+        return pd.DataFrame(
+            {"open": 100.0, "high": 110.0, "low": 95.0, "close": closes, "volume": 1000},
+            index=dates,
+        )
+
+    def test_spring_festival_2026_end_to_end(self):
+        """春節情境（不 mock calendar）：
+        TXF last=2026-02-11 → effective=2/11, trading=2/23,
+        gap=[2/11,2/12,2/13,2/17,2/18,2/19,2/20] (7 sessions, 2/16=Presidents Day 排除)
+        → calendar_anomaly='tw_holiday_gap', us_pcts 全非 None, default_open_price 非 None
+        """
+        txf = _make_txf(n=130, last_date="2026-02-11")
+        us = self._make_us_extended(last_date="2026-02-20")
+        data = {"txf": txf, "dj": us, "nq": us, "spy": us, "tsm": us}
+        observed_at = TZ.localize(datetime.datetime.fromisoformat("2026-02-22T06:00:00"))
+
+        snap = build_snapshot_from_data(
+            data, source="live", observed_at=observed_at,
+            txf_calendar_validation_mode="strict",
+            us_calendar_validation_mode="strict",
+        )
+
+        assert snap["calendar_anomaly"] == "tw_holiday_gap", \
+            f"expected tw_holiday_gap, got {snap['calendar_anomaly']}"
+        assert snap["effective_date"] == "2026-02-11"
+        assert snap["trading_date"] == "2026-02-23"
+        win = snap["us_aggregation_window"]
+        assert win is not None
+        assert win["start"] == "2026-02-11"
+        assert win["end"] == "2026-02-20"
+        assert win["session_count"] == 7, f"expected 7 sessions, got {win['session_count']}: {win['us_session_dates']}"
+        assert snap["default_open_price"] is not None
+        for k in ("dj", "nq", "spy", "tsm"):
+            pct = snap["us"][k]
+            assert pct is not None, f"us[{k}] should be cumulative pct, got None"
+
+    def test_thanksgiving_2026_case1_end_to_end(self):
+        """感恩節 Case 1（不 mock calendar）：
+        TXF last=2026-11-26 (台股有開), trading=2026-11-27,
+        美股 11/26 感恩節 → gap=[] → us_no_session
+        → default_open_price=None, us_pcts 全 None
+        """
+        txf = _make_txf(n=130, last_date="2026-11-26")
+        us = self._make_us_extended(last_date="2026-11-25")  # 美股最後開盤 11/25
+        data = {"txf": txf, "dj": us, "nq": us, "spy": us, "tsm": us}
+        observed_at = TZ.localize(datetime.datetime.fromisoformat("2026-11-27T06:00:00"))
+
+        snap = build_snapshot_from_data(
+            data, source="live", observed_at=observed_at,
+            txf_calendar_validation_mode="strict",
+            us_calendar_validation_mode="strict",
+        )
+
+        assert snap["calendar_anomaly"] == "us_no_session", \
+            f"expected us_no_session, got {snap['calendar_anomaly']}"
+        assert snap["effective_date"] == "2026-11-26"
+        assert snap["trading_date"] == "2026-11-27"
+        assert snap["default_open_price"] is None
+        for k in ("dj", "nq", "spy", "tsm"):
+            assert snap["us"][k] is None, f"us[{k}] should be None for us_no_session"
+
+    def test_normal_weekday_no_anomaly(self):
+        """正常交易日（5/22 → 5/25）：gap=1 session → calendar_anomaly='none'，無 chip。"""
+        txf = _make_txf(n=130, last_date="2026-05-22")
+        us = self._make_us_extended(last_date="2026-05-22")
+        data = {"txf": txf, "dj": us, "nq": us, "spy": us, "tsm": us}
+        observed_at = TZ.localize(datetime.datetime.fromisoformat("2026-05-23T06:00:00"))
+
+        snap = build_snapshot_from_data(
+            data, source="live", observed_at=observed_at,
+            txf_calendar_validation_mode="strict",
+            us_calendar_validation_mode="strict",
+        )
+
+        assert snap["calendar_anomaly"] == "none"
+        assert snap["us_aggregation_window"] is None
+        assert snap["default_open_price"] is not None
+        for k in ("dj", "nq", "spy", "tsm"):
+            assert snap["us"][k] is not None
+
+    def test_render_spring_festival_html_contains_window_text(self):
+        """渲染靜態 HTML 驗證：
+        - window._calendarAnomaly 被 Jinja2 渲染為 'tw_holiday_gap'
+        - cum-chip 元素（區間累積）存在於 HTML
+        - JS patchDOM/bootstrapFresh 有 tw_holiday_gap 分支的處理程式碼
+        - 不包含 us_no_session 的「無開盤」靜態文字
+
+        注意：adj-banner 文字是 JS 動態注入（bootstrapFresh/patchDOM 呼叫後才出現），
+        靜態 HTML 中只有 JS 模板字串，不包含實際日期字串。
+        """
+        from src.render import _env
+
+        snapshot = {
+            **_FIXTURE_SNAPSHOT,
+            "calendar_anomaly": "tw_holiday_gap",
+            "us_aggregation_window": {
+                "start": "2026-02-11",
+                "end": "2026-02-20",
+                "session_count": 7,
+                "us_session_dates": [
+                    "2026-02-11", "2026-02-12", "2026-02-13",
+                    "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+                ],
+            },
+            "effective_date": "2026-02-11",
+            "trading_date": "2026-02-23",
+            "asof_adjusted_from": None,
+        }
+        template = _env.get_template("index.html.j2")
+        html = template.render(**snapshot)
+
+        # Jinja2 server-side 渲染的 _calendarAnomaly 全域變數
+        assert "window._calendarAnomaly = 'tw_holiday_gap'" in html, \
+            "_calendarAnomaly should be rendered as tw_holiday_gap"
+        # 區間累積 chip element 應存在
+        assert 'id="cum-chip"' in html, "cum-chip element should exist"
+        assert "區間累積" in html, "chip text should appear in HTML"
+        # JS 程式碼有 tw_holiday_gap 分支（confirm feature is wired）
+        assert "tw_holiday_gap" in html, "tw_holiday_gap branch should be in JS"
+        # 不應出現 us_no_session 靜態文字（確認正確情境）
+        assert "window._calendarAnomaly = 'us_no_session'" not in html
