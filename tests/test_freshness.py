@@ -110,13 +110,15 @@ class TestCheckFreshness:
         assert result["expected_trade_date"] == datetime.date(2026, 5, 18)
 
     def test_non_session_uses_previous(self):
-        """週末（non-session day），expected = previous_session。"""
+        """週末（non-session day），expected = date_to_session(direction='previous')。
+        Fix: 非 session 日改用 date_to_session 而非 previous_session（後者要求輸入為 session）。
+        """
         txf = _make_txf("2026-05-15")  # 週五
         observed_at = _tpe("2026-05-16T12:00:00")  # 週六
 
         mock_xtai = MagicMock()
         mock_xtai.is_session.return_value = False
-        mock_xtai.previous_session.return_value = pd.Timestamp("2026-05-15")
+        mock_xtai.date_to_session.return_value = pd.Timestamp("2026-05-15")
 
         with patch.object(freshness, "_get_calendar", return_value=mock_xtai):
             result = freshness.check_freshness(txf, observed_at)
@@ -124,6 +126,9 @@ class TestCheckFreshness:
         assert result["is_stale"] is False
         assert result["mode"] == "normal"
         assert result["expected_trade_date"] == datetime.date(2026, 5, 15)
+        mock_xtai.date_to_session.assert_called_once_with(
+            pd.Timestamp("2026-05-16"), direction="previous"
+        )
 
     def test_degraded_when_calendar_unavailable(self):
         """exchange_calendars import 失敗 → mode=degraded, is_stale=False。"""
@@ -144,20 +149,25 @@ class TestCheckFreshness:
         result = freshness.check_freshness(empty_df, observed_at)
         assert result["is_stale"] is True
 
-    def test_uses_previous_session_not_fixed_window(self):
-        """驗證實作呼叫 previous_session 而非 sessions_in_range。"""
+    def test_uses_date_to_session_for_non_session_day(self):
+        """非 session 日（週末/假日）→ 呼叫 date_to_session(direction='previous')，不用 previous_session。
+        Fix: previous_session 要求 session 輸入，週末傳入會拋 NotSessionError。
+        """
         txf = _make_txf("2026-05-15")
         observed_at = _tpe("2026-05-16T12:00:00")
 
         mock_xtai = MagicMock()
         mock_xtai.is_session.return_value = False
-        mock_xtai.previous_session.return_value = pd.Timestamp("2026-05-15")
+        mock_xtai.date_to_session.return_value = pd.Timestamp("2026-05-15")
 
         with patch.object(freshness, "_get_calendar", return_value=mock_xtai):
             freshness.check_freshness(txf, observed_at)
 
-        mock_xtai.previous_session.assert_called()
-        assert not hasattr(mock_xtai, "sessions_in_range") or not mock_xtai.sessions_in_range.called
+        mock_xtai.date_to_session.assert_called_with(
+            pd.Timestamp("2026-05-16"), direction="previous"
+        )
+        assert not mock_xtai.previous_session.called, \
+            "previous_session should NOT be called for non-session input"
 
     def test_after_close_marks_today_as_expected(self):
         """收盤後（14:00）觀測，txf 最後日是今日 → not stale（expected = today）。"""
@@ -445,3 +455,57 @@ class TestUsSessionsBetween:
                 datetime.date(2026, 5, 21), datetime.date(2026, 5, 22)
             )
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# 週末/假日安全性（regression：prod 503 on Saturday startup）
+# ---------------------------------------------------------------------------
+
+class TestWeekendCalendarSafety:
+    """
+    exchange_calendars.previous_session/next_session 要求輸入必須是 session，
+    週末/假日傳入會拋 NotSessionError，被吞成 degraded mode → 啟動無法 publish HTML。
+    修正用 date_to_session(direction) 避免這個問題。
+    """
+
+    def test_check_freshness_saturday_returns_normal_mode(self):
+        """週六 observed_at → mode='normal'（非 'degraded'）；expected = 週五。"""
+        df = _make_txf("2026-05-22")
+        obs = _tpe("2026-05-23T10:00:00")  # Saturday
+        r = freshness.check_freshness(df, obs)
+        assert r["mode"] == "normal", f"Got degraded instead of normal; bug is back: {r}"
+        assert r["expected_trade_date"] == datetime.date(2026, 5, 22)
+        assert r["is_stale"] is False
+
+    def test_check_freshness_sunday_returns_normal_mode(self):
+        """週日 observed_at → 同樣不走 degraded 路徑。"""
+        df = _make_txf("2026-05-22")
+        obs = _tpe("2026-05-24T10:00:00")  # Sunday
+        r = freshness.check_freshness(df, obs)
+        assert r["mode"] == "normal"
+        assert r["expected_trade_date"] == datetime.date(2026, 5, 22)
+
+    def test_previous_xtai_session_saturday_returns_friday(self):
+        """週六傳入 → 回上個交易日（週五）。"""
+        result = freshness.previous_xtai_session(datetime.date(2026, 5, 23))
+        assert result == datetime.date(2026, 5, 22)
+
+    def test_previous_xtai_session_friday_returns_thursday(self):
+        """session 傳入時保持「不含 d 本身」語意 → 回前一個交易日。"""
+        result = freshness.previous_xtai_session(datetime.date(2026, 5, 22))
+        assert result == datetime.date(2026, 5, 21)
+
+    def test_next_xtai_session_sunday_returns_monday(self):
+        """週日傳入 → 回下個交易日（週一）。"""
+        result = freshness.next_xtai_session(datetime.date(2026, 5, 24))
+        assert result == datetime.date(2026, 5, 25)
+
+    def test_next_xtai_session_friday_returns_monday(self):
+        """session（週五）傳入 → 不含本身，回下個交易日（週一）。"""
+        result = freshness.next_xtai_session(datetime.date(2026, 5, 22))
+        assert result == datetime.date(2026, 5, 25)
+
+    def test_previous_nyse_session_saturday_returns_friday(self):
+        """NYSE 週六傳入 → 回上個美股交易日（週五）。"""
+        result = freshness.previous_nyse_session(datetime.date(2026, 5, 23))
+        assert result == datetime.date(2026, 5, 22)

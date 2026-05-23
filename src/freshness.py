@@ -56,9 +56,11 @@ def check_freshness(df: pd.DataFrame, observed_at: datetime.datetime) -> dict:
             if observed_local >= close_aware:
                 expected_trade_date = observed_date
             else:
+                # obs_ts is a session — previous_session() is safe
                 expected_trade_date = xtai.previous_session(obs_ts).date()
         else:
-            expected_trade_date = xtai.previous_session(obs_ts).date()
+            # obs_ts is not a session (weekend/holiday) — previous_session() raises NotSessionError
+            expected_trade_date = xtai.date_to_session(obs_ts, direction="previous").date()
 
         last_trade = df.index[-1]
         if hasattr(last_trade, "date"):
@@ -125,7 +127,12 @@ def previous_xtai_session(d: datetime.date) -> datetime.date | None:
     """
     try:
         xtai = _get_calendar("XTAI")
-        return xtai.previous_session(pd.Timestamp(d)).date()
+        ts = pd.Timestamp(d)
+        if xtai.is_session(ts):
+            # previous_session() requires session input — d is a session, safe
+            return xtai.previous_session(ts).date()
+        # d is not a session (weekend/holiday): date_to_session returns nearest session ≤ d
+        return xtai.date_to_session(ts, direction="previous").date()
     except Exception:
         return None
 
@@ -134,7 +141,12 @@ def next_xtai_session(d: datetime.date) -> datetime.date | None:
     """回傳 d 之後最近的 XTAI session 日期（不含 d 本身）。Calendar 不可用 → None。"""
     try:
         xtai = _get_calendar("XTAI")
-        return xtai.next_session(pd.Timestamp(d)).date()
+        ts = pd.Timestamp(d)
+        if xtai.is_session(ts):
+            # next_session() requires session input — d is a session, safe
+            return xtai.next_session(ts).date()
+        # d is not a session: date_to_session returns nearest session ≥ d
+        return xtai.date_to_session(ts, direction="next").date()
     except Exception:
         return None
 
@@ -143,8 +155,10 @@ def previous_nyse_session(d: datetime.date) -> datetime.date | None:
     """回傳 d 之前最近的 NYSE session 日期。不可用 → None。"""
     try:
         xnys = _get_calendar("XNYS")
-        result = xnys.previous_session(pd.Timestamp(d))
-        return result.date()
+        ts = pd.Timestamp(d)
+        if xnys.is_session(ts):
+            return xnys.previous_session(ts).date()
+        return xnys.date_to_session(ts, direction="previous").date()
     except Exception:
         return None
 
